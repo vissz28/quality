@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: mr-test-generator
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: GITLAB_URL
+        value: https://gitlab.com
+      - key: GITLAB_TOKEN
+        sync: false
+      - key: GITLAB_WEBHOOK_SECRET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+    healthCheckPath: /health
