@@ -1,0 +1,42 @@
+# Add this job to the .gitlab-ci.yml of your TARGET project (SpritePinky or similar).
+# It runs only when the webhook service commits an HTML report to the branch.
+# The artifact appears as a "View Report" button in the MR pipeline.
+
+publish-ai-test-report:
+  stage: test
+  image: alpine:latest
+  rules:
+    # Only run when the AI bot commits a report file
+    - changes:
+        - "test-reports/mr-*.html"
+  script:
+    - echo "AI-generated test report is ready as artifact"
+    - ls -la test-reports/
+  artifacts:
+    name: "AI Test Report - MR !$CI_MERGE_REQUEST_IID"
+    expose_as: "📊 AI Test Report"
+    paths:
+      - test-reports/
+    when: always
+    expire_in: 30 days
+  # Don't block other jobs if this one isn't triggered
+  allow_failure: true
+
+
+# ─── docker-compose for the webhook service itself ───────────────────────────
+# Save this as docker-compose.yml in the mr-test-generator repo:
+#
+# services:
+#   testgen:
+#     build: .
+#     ports:
+#       - "8000:8000"
+#     env_file: .env
+#     restart: unless-stopped
+#
+# ─── .env template ───────────────────────────────────────────────────────────
+#
+# GITLAB_URL=https://gitlab.teamystem.com   # or https://gitlab.com
+# GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+# GITLAB_WEBHOOK_SECRET=your-random-secret
+# ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx
