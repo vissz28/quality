@@ -12,9 +12,9 @@ class GitlabTokenMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in self.PROTECTED_PATHS:
-            token = request.headers.get("X-Gitlab-Token", "")
-            if token != settings.GITLAB_WEBHOOK_SECRET:
+            secret = request.query_params.get("secret", "")
+            if secret != settings.GITLAB_WEBHOOK_SECRET:
                 return JSONResponse(
-                    {"detail": "Invalid webhook token"}, status_code=401
+                    {"detail": "Invalid webhook secret"}, status_code=401
                 )
         return await call_next(request)

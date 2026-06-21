@@ -36,7 +36,13 @@ publish-ai-test-report:
 #
 # ─── .env template ───────────────────────────────────────────────────────────
 #
-# GITLAB_URL=https://gitlab.teamystem.com   # or https://gitlab.com
+# GITLAB_URL=https://biosphere.teamsystem.com/
+# GITLAB_USERNAME=e.zefaj
 # GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
 # GITLAB_WEBHOOK_SECRET=your-random-secret
 # ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx
+#
+# ─── Webhook URL ──────────────────────────────────────────────────────────────
+# Configure the GitLab webhook to call:
+#   https://<your-service>/webhook/gitlab?secret=<GITLAB_WEBHOOK_SECRET>
+# The secret is passed as a query param, not a header.

@@ -11,22 +11,19 @@ from app.main import app
 client = TestClient(app)
 
 
-def test_webhook_rejects_missing_token():
+def test_webhook_rejects_missing_secret():
     response = client.post("/webhook/gitlab", json={})
     assert response.status_code == 401
 
 
-def test_webhook_rejects_wrong_token():
-    response = client.post(
-        "/webhook/gitlab", json={}, headers={"X-Gitlab-Token": "wrong"}
-    )
+def test_webhook_rejects_wrong_secret():
+    response = client.post("/webhook/gitlab?secret=wrong", json={})
     assert response.status_code == 401
 
 
-def test_webhook_accepts_correct_token():
+def test_webhook_accepts_correct_secret():
     response = client.post(
-        "/webhook/gitlab",
+        "/webhook/gitlab?secret=test-secret",
         json={"object_kind": "note"},
-        headers={"X-Gitlab-Token": "test-secret"},
     )
     assert response.status_code == 200
