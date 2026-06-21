@@ -1,17 +1,18 @@
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
+from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 import logging
 
-from .config import settings
 from .gitlab_client import GitLabClient
 from .test_generator import TestGenerator
 from .comment_builder import CommentBuilder
 from .report_builder import ReportBuilder
+from .middleware import GitlabTokenMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="MR Test Generator", version="1.0.0")
+app.add_middleware(GitlabTokenMiddleware)
 
 
 @app.get("/health")
@@ -21,11 +22,6 @@ async def health():
 
 @app.post("/webhook/gitlab")
 async def gitlab_webhook(request: Request, background_tasks: BackgroundTasks):
-    # Validate secret token
-    token = request.headers.get("X-Gitlab-Token", "")
-    if token != settings.GITLAB_WEBHOOK_SECRET:
-        raise HTTPException(status_code=401, detail="Invalid webhook token")
-
     payload = await request.json()
 
     # Only handle merge_request events
