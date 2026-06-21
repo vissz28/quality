@@ -12,9 +12,5 @@ services:
         value: https://biosphere.teamsystem.com/
       - key: GITLAB_USERNAME
         value: e.zefaj
-      - key: GITLAB_TOKEN
-        sync: false
-      - key: GITLAB_WEBHOOK_SECRET
-        sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
