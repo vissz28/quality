@@ -1,49 +1,101 @@
-# Add this job to the .gitlab-ci.yml of your TARGET project (SpritePinky or similar).
-# It runs only when the webhook service commits an HTML report to the branch.
-# The artifact appears as a "View Report" button in the MR pipeline.
+# ─────────────────────────────────────────────────────────────────────────────
+# Add these jobs to your project's .gitlab-ci.yml.
+#
+# Stage 1: your normal pipeline (lint, test, build, etc.)
+# Stage 2: ai-test — depends on stage 1, blocks merge until AI finishes
+#
+# Required CI/CD variables (Settings → CI/CD → Variables):
+#   AI_GENERATOR_URL   URL of the quality bot, e.g. https://mr-test-generator.onrender.com
+#   AI_WEBHOOK_SECRET  Same value as GITLAB_WEBHOOK_SECRET on the bot
+# ─────────────────────────────────────────────────────────────────────────────
 
-publish-ai-test-report:
-  stage: test
-  image: alpine:latest
+stages:
+  - test        # your existing stages go here
+  - ai-test     # add this stage after your pipeline passes
+
+# ── AI Test Generator ─────────────────────────────────────────────────────────
+#
+# This job:
+#   1. Triggers the AI bot to generate Gherkin + Playwright tests for this MR
+#   2. Polls until the HTML report is committed to the branch (max 10 min)
+#   3. Downloads the report and publishes it as a pipeline artifact
+#   4. Blocks merge until complete — configure in Settings → Merge requests →
+#      "Pipelines must succeed" or add "AI Test Generator" as a required check
+#
+ai-test-generator:
+  stage: ai-test
+  image: alpine:3.19
   rules:
-    # Only run when the AI bot commits a report file
-    - changes:
-        - "test-reports/mr-*.html"
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  needs:
+    - job: your-lint-job        # ← replace with your actual job names
+    - job: your-test-job        # ← replace with your actual job names
+  before_script:
+    - apk add --no-cache curl jq
   script:
-    - echo "AI-generated test report is ready as artifact"
-    - ls -la test-reports/
+    # ── 1. Trigger the AI bot ────────────────────────────────────────────────
+    - echo "→ Triggering AI Test Generator..."
+    - |
+      curl -sf \
+        -X POST "$AI_GENERATOR_URL/webhook/gitlab" \
+        -H "X-Gitlab-Token: $AI_WEBHOOK_SECRET" \
+        -H "Content-Type: application/json" \
+        -d "{
+          \"object_kind\": \"merge_request\",
+          \"project\": {
+            \"id\": $CI_PROJECT_ID,
+            \"web_url\": \"$CI_PROJECT_URL\"
+          },
+          \"object_attributes\": {
+            \"iid\": $CI_MERGE_REQUEST_IID,
+            \"title\": \"$CI_MERGE_REQUEST_TITLE\",
+            \"description\": \"\",
+            \"action\": \"update\",
+            \"source_branch\": \"$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME\",
+            \"target_branch\": \"$CI_MERGE_REQUEST_TARGET_BRANCH_NAME\",
+            \"last_commit\": {\"id\": \"$CI_COMMIT_SHA\"},
+            \"url\": \"$CI_PROJECT_URL/-/merge_requests/$CI_MERGE_REQUEST_IID\"
+          },
+          \"user\": {\"name\": \"$GITLAB_USER_LOGIN\"}
+        }"
+    - echo "✓ Bot triggered."
+
+    # ── 2. Poll for the HTML report (max 10 min, every 20s) ─────────────────
+    - echo "→ Waiting for AI report..."
+    - REPORT_PATH="test-reports%2Fmr-${CI_MERGE_REQUEST_IID}-tests.html"
+    - |
+      for i in $(seq 1 30); do
+        STATUS=$(curl -sf \
+          --header "PRIVATE-TOKEN: $CI_JOB_TOKEN" \
+          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/files/$REPORT_PATH?ref=$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" \
+          | jq -r '.file_name // "not_found"' 2>/dev/null || echo "not_found")
+        if [ "$STATUS" != "not_found" ]; then
+          echo "✓ Report found after $((i * 20))s."
+          break
+        fi
+        if [ "$i" -eq 30 ]; then
+          echo "✗ Timed out after 10 minutes waiting for AI report."
+          exit 1
+        fi
+        echo "  Attempt $i/30 — waiting 20s..."
+        sleep 20
+      done
+
+    # ── 3. Download the HTML report ──────────────────────────────────────────
+    - mkdir -p test-reports
+    - |
+      curl -sf \
+        --header "PRIVATE-TOKEN: $CI_JOB_TOKEN" \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/files/$REPORT_PATH/raw?ref=$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" \
+        -o "test-reports/mr-${CI_MERGE_REQUEST_IID}-tests.html"
+    - echo "✓ Report downloaded."
+    - echo "  Scenarios $(grep -c 'Scenario' test-reports/mr-${CI_MERGE_REQUEST_IID}-tests.html || echo 0)"
+    - echo "  Tests     $(grep -c 'test(' test-reports/mr-${CI_MERGE_REQUEST_IID}-tests.html || echo 0)"
+
   artifacts:
-    name: "AI Test Report - MR !$CI_MERGE_REQUEST_IID"
+    name: "AI Test Report — MR !$CI_MERGE_REQUEST_IID"
     expose_as: "📊 AI Test Report"
     paths:
       - test-reports/
     when: always
     expire_in: 30 days
-  # Don't block other jobs if this one isn't triggered
-  allow_failure: true
-
-
-# ─── docker-compose for the webhook service itself ───────────────────────────
-# Save this as docker-compose.yml in the mr-test-generator repo:
-#
-# services:
-#   testgen:
-#     build: .
-#     ports:
-#       - "8000:8000"
-#     env_file: .env
-#     restart: unless-stopped
-#
-# ─── .env template ───────────────────────────────────────────────────────────
-#
-# GITLAB_URL=https://biosphere.teamsystem.com/
-# GITLAB_USERNAME=e.zefaj
-# GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
-# GITLAB_WEBHOOK_SECRET=your-random-secret
-# ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx
-#
-# ─── Webhook URL ──────────────────────────────────────────────────────────────
-# Configure the GitLab webhook to call:
-#   https://<your-service>/webhook/gitlab
-# In GitLab → Settings → Webhooks → Secret token, set the same value as
-# GITLAB_WEBHOOK_SECRET. GitLab sends it as the X-Gitlab-Token header.

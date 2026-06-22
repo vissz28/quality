@@ -30,11 +30,10 @@ class TestGenerator:
         mr_description: str,
         diff_text: str,
         file_contents: dict[str, str],
-        quality_context: str | None = None,
         example_tests: list[tuple[str, str]] | None = None,
         code_analysis: str | None = None,
     ) -> str:
-        system = _build_system(GHERKIN_SYSTEM, quality_context, example_tests, code_analysis)
+        system = _build_system(GHERKIN_SYSTEM, example_tests, code_analysis)
         context = _build_context(mr_title, mr_description, diff_text, file_contents)
         prompt = f"{context}\n\nGenerate the Gherkin .feature file for this MR:"
 
@@ -52,11 +51,10 @@ class TestGenerator:
         diff_text: str,
         gherkin: str,
         file_contents: dict[str, str],
-        quality_context: str | None = None,
         example_tests: list[tuple[str, str]] | None = None,
         code_analysis: str | None = None,
     ) -> str:
-        system = _build_system(PLAYWRIGHT_SYSTEM, quality_context, example_tests, code_analysis)
+        system = _build_system(PLAYWRIGHT_SYSTEM, example_tests, code_analysis)
         context = _build_context(mr_title, "", diff_text, file_contents)
         prompt = (
             f"{context}\n\n"
@@ -75,13 +73,10 @@ class TestGenerator:
 
 def _build_system(
     base: str,
-    quality_context: str | None,
     example_tests: list[tuple[str, str]] | None,
     code_analysis: str | None = None,
 ) -> str:
     parts = [base]
-    if quality_context:
-        parts.append(f"## Project Conventions\n{quality_context}")
     if example_tests:
         examples = "\n\n".join(
             f"### {path}\n```\n{content}\n```" for path, content in example_tests
@@ -105,12 +100,12 @@ def _build_context(
 
     if file_contents:
         files_section = "\n\n".join(
-            f"### {path}\n```\n{content[:2000]}\n```"
-            for path, content in list(file_contents.items())[:5]
+            f"### {path}\n```diff\n{content}\n```"
+            for path, content in list(file_contents.items())[:10]
         )
-        parts.append(f"## Key Changed Files\n{files_section}")
+        parts.append(f"## Changed Sections\n{files_section}")
 
     if diff_text:
-        parts.append(f"## Diff\n```diff\n{diff_text[:6000]}\n```")
+        parts.append(f"## Full Diff\n```diff\n{diff_text[:6000]}\n```")
 
     return "\n\n".join(parts)

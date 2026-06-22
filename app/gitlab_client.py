@@ -79,10 +79,6 @@ class GitLabClient:
 
     # ── Learning context (R1, R2) ─────────────────────────────────────────────
 
-    async def get_quality_context(self, project_id: int, ref: str) -> str | None:
-        """Fetch QUALITY_CONTEXT.md from the repo root (R1). Returns None if absent."""
-        return await self.get_file_content(project_id, "QUALITY_CONTEXT.md", ref)
-
     async def get_example_tests(
         self, project_id: int, ref: str, limit: int = 3
     ) -> list[tuple[str, str]]:

@@ -178,12 +178,8 @@ async def process_mr(
             if diff:
                 file_contents[file["new_path"]] = _extract_changed_lines(diff)
 
-        # ── 3. Fetch learning context (R1, R2) ────────────────────────────────
-        logger.info(f"[MR !{mr_iid}] Fetching project context...")
-        quality_context = await gitlab.get_quality_context(project_id, target_branch)
+        # ── 3. Fetch example tests for style reference (R2) ──────────────────
         example_tests = await gitlab.get_example_tests(project_id, target_branch)
-        if quality_context:
-            logger.info(f"[MR !{mr_iid}] QUALITY_CONTEXT.md found.")
         if example_tests:
             logger.info(f"[MR !{mr_iid}] {len(example_tests)} example test(s) found.")
 
@@ -202,7 +198,6 @@ async def process_mr(
         logger.info(f"[MR !{mr_iid}] Generating Gherkin...")
         gherkin = await generator.generate_gherkin(
             mr_title, mr_description, diff_text, file_contents,
-            quality_context=quality_context,
             example_tests=example_tests,
             code_analysis=code_analysis,
         )
@@ -211,7 +206,6 @@ async def process_mr(
         logger.info(f"[MR !{mr_iid}] Generating Playwright...")
         playwright = await generator.generate_playwright(
             mr_title, diff_text, gherkin, file_contents,
-            quality_context=quality_context,
             example_tests=example_tests,
             code_analysis=code_analysis,
         )
