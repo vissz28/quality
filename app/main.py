@@ -46,6 +46,7 @@ async def gitlab_webhook(request: Request, background_tasks: BackgroundTasks):
     background_tasks.add_task(
         process_mr,
         project_id=project_id,
+        project_web_url=payload["project"]["web_url"],
         mr_iid=mr_iid,
         mr_title=mr["title"],
         mr_description=mr.get("description", ""),
@@ -60,6 +61,7 @@ async def gitlab_webhook(request: Request, background_tasks: BackgroundTasks):
 
 async def process_mr(
     project_id: int,
+    project_web_url: str,
     mr_iid: int,
     mr_title: str,
     mr_description: str,
@@ -106,12 +108,14 @@ async def process_mr(
 
         # ── 5. Post bot comment ────────────────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Posting comment...")
+        report_url = f"{project_web_url}/-/raw/{source_branch}/test-reports/mr-{mr_iid}-tests.html"
         comment_md = CommentBuilder.build(
             mr_iid=mr_iid,
             mr_title=mr_title,
             changed_files=[f["new_path"] for f in relevant],
             gherkin=gherkin,
             playwright=playwright,
+            report_url=report_url,
         )
         await gitlab.post_mr_comment(project_id, mr_iid, comment_md)
 

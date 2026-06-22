@@ -9,6 +9,7 @@ class CommentBuilder:
         changed_files: list[str],
         gherkin: str,
         playwright: str,
+        report_url: str = "",
     ) -> str:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         file_list = "\n".join(f"- `{f}`" for f in changed_files[:20])
@@ -53,7 +54,6 @@ class CommentBuilder:
 
 ---
 
-> 📊 Full interactive report available as a pipeline artifact: \
-`test-reports/mr-{mr_iid}-tests.html`
+> 📊 [**Open full interactive report**]({report_url})
 > ⚠️ *Always review AI-generated tests before merging.*
 """
