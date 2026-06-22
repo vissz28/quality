@@ -8,7 +8,6 @@ from .code_analyzer import CodeAnalyzer
 from .comment_builder import CommentBuilder
 from .gitlab_client import GitLabClient
 from .middleware import GitlabTokenMiddleware
-from .report_builder import ReportBuilder
 from .test_generator import TestGenerator
 
 _VERSION = (Path(__file__).parent.parent / "VERSION").read_text().strip()
@@ -236,43 +235,19 @@ async def process_mr(
             code_analysis=code_analysis,
         )
 
-        # ── 7. Post bot comment ────────────────────────────────────────────
+        # ── 7. Post results as MR comment ─────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Posting comment...")
-        report_url = f"{project_web_url}/-/blob/{source_branch}/test-reports/mr-{mr_iid}-tests.html"
         comment_md = CommentBuilder.build(
             mr_iid=mr_iid,
             mr_title=mr_title,
             changed_files=[f["new_path"] for f in relevant],
             gherkin=gherkin,
             playwright=playwright,
-            report_url=report_url,
+            code_analysis=code_analysis,
         )
         await gitlab.post_mr_comment(project_id, mr_iid, comment_md)
 
-        # ── 7. Commit HTML report to branch ───────────────────────────────
-        logger.info(f"[MR !{mr_iid}] Committing HTML report to '{source_branch}'...")
-        html_report = ReportBuilder.build(
-            mr_iid=mr_iid,
-            mr_title=mr_title,
-            mr_url=mr_url,
-            author=author,
-            source_branch=source_branch,
-            target_branch=target_branch,
-            changed_files=relevant,
-            gherkin=gherkin,
-            playwright=playwright,
-            code_analysis=code_analysis,
-        )
-        await gitlab.commit_file(
-            project_id=project_id,
-            branch=source_branch,
-            file_path=f"test-reports/mr-{mr_iid}-tests.html",
-            content=html_report,
-            commit_message=f"chore(tests): AI-generated report for MR !{mr_iid} [skip ci]",
-        )
-        logger.info(f"[MR !{mr_iid}] HTML report committed successfully.")
-
-        await _set_status("success", "Tests generated — review before merging.", report_url)
+        await _set_status("success", "Tests generated — review before merging.", mr_url)
         logger.info(f"[MR !{mr_iid}] ✅ Done.")
 
     except Exception as e:

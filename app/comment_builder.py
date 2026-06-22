@@ -9,12 +9,25 @@ class CommentBuilder:
         changed_files: list[str],
         gherkin: str,
         playwright: str,
-        report_url: str = "",
+        code_analysis: str | None = None,
     ) -> str:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         file_list = "\n".join(f"- `{f}`" for f in changed_files[:20])
         scenario_count = gherkin.count("Scenario")
         test_count = playwright.count("test(")
+
+        analysis_section = ""
+        if code_analysis:
+            analysis_section = f"""---
+
+<details>
+<summary>🔍 <strong>Code analysis</strong> (developer-agent)</summary>
+
+{code_analysis}
+
+</details>
+
+"""
 
         return f"""## 🤖 AI Test Generator
 
@@ -30,7 +43,7 @@ class CommentBuilder:
 {file_list}
 </details>
 
----
+{analysis_section}---
 
 <details>
 <summary>🥒 <strong>Gherkin scenarios</strong> ({scenario_count} scenario(s))</summary>
@@ -54,6 +67,5 @@ class CommentBuilder:
 
 ---
 
-> 📊 [**Open full interactive report**]({report_url})
 > ⚠️ *Always review AI-generated tests before merging.*
 """
