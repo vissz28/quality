@@ -148,7 +148,19 @@ async def process_mr(
     try:
         await _set_status("pending", "Generating tests…")
 
-        # ── 1. Fetch MR diff ───────────────────────────────────────────────
+        # ── 1. Check pipeline status — skip if failed ─────────────────────
+        pipeline_status = await gitlab.get_latest_pipeline_status(project_id, source_branch)
+        if pipeline_status == "failed":
+            logger.info(f"[MR !{mr_iid}] Pipeline failed — skipping test generation.")
+            await _set_status("failed", "Pipeline failed — fix it before generating tests.")
+            await gitlab.post_mr_comment(
+                project_id, mr_iid,
+                "⚠️ **AI Test Generator** skipped: the pipeline is failing on this branch.\n\n"
+                "Fix the pipeline first, then push a new commit to trigger test generation."
+            )
+            return
+
+        # ── 2. Fetch MR diff ───────────────────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Fetching diff...")
         changes = await gitlab.get_mr_changes(project_id, mr_iid)
         relevant = _filter_relevant_files(changes)
@@ -157,15 +169,14 @@ async def process_mr(
             logger.info(f"[MR !{mr_iid}] No relevant files found, skipping.")
             return
 
-        # ── 2. Fetch file contents (up to 10 files) ────────────────────────
-        logger.info(f"[MR !{mr_iid}] Fetching {len(relevant[:10])} file(s)...")
+        # ── 3. Build diff-focused file contents ────────────────────────────
+        # Use only the changed hunks per file — not the full file content.
+        # For new files (no previous version), include full diff as context.
         file_contents: dict[str, str] = {}
         for file in relevant[:10]:
-            content = await gitlab.get_file_content(
-                project_id, file["new_path"], source_branch
-            )
-            if content:
-                file_contents[file["new_path"]] = content
+            diff = file.get("diff", "")
+            if diff:
+                file_contents[file["new_path"]] = _extract_changed_lines(diff)
 
         # ── 3. Fetch learning context (R1, R2) ────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Fetching project context...")
@@ -275,6 +286,34 @@ def _filter_relevant_files(changes: list[dict]) -> list[dict]:
         if ext in RELEVANT_EXTENSIONS:
             result.append(change)
     return result
+
+
+def _extract_changed_lines(diff: str, context: int = 3) -> str:
+    """Return only added/removed lines plus `context` surrounding lines from a unified diff.
+
+    Strips hunk headers and unchanged lines beyond the context window so the AI
+    sees exactly what changed — not the whole file.
+    """
+    lines = diff.splitlines()
+    result: list[str] = []
+    window: list[str] = []
+
+    for line in lines:
+        if line.startswith(("@@", "---", "+++")):
+            if window:
+                result.extend(window)
+                window = []
+            result.append(line)
+        elif line.startswith(("+", "-")):
+            result.extend(window)
+            window = []
+            result.append(line)
+        else:
+            window.append(line)
+            if len(window) > context:
+                window.pop(0)
+
+    return "\n".join(result)[:3000]
 
 
 def _format_diff(changes: list[dict]) -> str:

@@ -28,6 +28,19 @@ class GitLabClient:
             r = await client.post(url, headers=self.headers, json={"body": body})
             r.raise_for_status()
 
+    async def get_latest_pipeline_status(
+        self, project_id: int, ref: str
+    ) -> str | None:
+        """Return the status of the latest pipeline for a branch."""
+        url = f"{self.base}/projects/{project_id}/pipelines"
+        params = {"ref": ref, "order_by": "id", "sort": "desc", "per_page": 1}
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=self.headers, params=params)
+            if r.status_code != 200:
+                return None
+            pipelines = r.json()
+            return pipelines[0]["status"] if pipelines else None
+
     async def get_open_mr_for_branch(
         self, project_id: int, branch: str
     ) -> int | None:
