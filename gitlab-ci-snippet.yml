@@ -41,6 +41,7 @@ ai-test-generator:
       HTTP_STATUS=$(curl -s -o /tmp/bot_response.json -w "%{http_code}" \
         -X POST "$AI_GENERATOR_URL/webhook/gitlab" \
         -H "X-Gitlab-Token: $AI_WEBHOOK_SECRET" \
+        -H "X-Triggered-By: ci-pipeline" \
         -H "Content-Type: application/json" \
         -d "{
           \"object_kind\": \"merge_request\",

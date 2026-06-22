@@ -39,16 +39,23 @@ async def gitlab_webhook(request: Request, background_tasks: BackgroundTasks):
     mr = payload["object_attributes"]
     action = mr.get("action", "")
 
-    # Only trigger on meaningful MR actions
     if action not in ("open", "update", "reopen"):
         return JSONResponse({"status": "ignored", "reason": f"action '{action}' not handled"})
 
     project_id = payload["project"]["id"]
     mr_iid = mr["iid"]
-
-    logger.info(f"Processing MR !{mr_iid} (action: {action}) in project {project_id}")
-
     commit_sha = mr.get("last_commit", {}).get("id", "")
+
+    # Native GitLab MR webhook fires on every push, before the pipeline runs.
+    # Only the CI snippet (which runs after the pipeline passes) is authorised
+    # to trigger full test generation. Native webhooks just mark the commit as
+    # pending so the MR shows a check immediately.
+    if request.headers.get("X-Triggered-By") != "ci-pipeline":
+        logger.info(f"[MR !{mr_iid}] Native webhook received — setting status to pending.")
+        background_tasks.add_task(_mark_pending, project_id, commit_sha)
+        return JSONResponse({"status": "pending", "mr_iid": mr_iid})
+
+    logger.info(f"[MR !{mr_iid}] CI-triggered — starting test generation (action: {action}).")
 
     background_tasks.add_task(
         process_mr,
@@ -93,6 +100,18 @@ async def _handle_pipeline_event(
         mr_iid=mr_iid,
     )
     return JSONResponse({"status": "accepted", "pipeline_id": pipeline_id})
+
+
+async def _mark_pending(project_id: int, commit_sha: str) -> None:
+    if not commit_sha:
+        return
+    gitlab = GitLabClient()
+    try:
+        await gitlab.set_commit_status(
+            project_id, commit_sha, "pending", "Waiting for pipeline to pass…"
+        )
+    except Exception:
+        logger.warning(f"Failed to set pending status for commit {commit_sha[:8]}")
 
 
 async def notify_pipeline_failure(
@@ -146,21 +165,9 @@ async def process_mr(
                 logger.warning(f"[MR !{mr_iid}] Failed to set commit status '{state}'")
 
     try:
-        await _set_status("pending", "Generating tests…")
+        await _set_status("running", "Generating tests…")
 
-        # ── 1. Check pipeline status — skip if failed ─────────────────────
-        pipeline_status = await gitlab.get_latest_pipeline_status(project_id, source_branch)
-        if pipeline_status == "failed":
-            logger.info(f"[MR !{mr_iid}] Pipeline failed — skipping test generation.")
-            await _set_status("failed", "Pipeline failed — fix it before generating tests.")
-            await gitlab.post_mr_comment(
-                project_id, mr_iid,
-                "❌ **AI Test Generator** failed: the pipeline is failing on this branch.\n\n"
-                "Fix the pipeline first, then push a new commit to trigger test generation."
-            )
-            return
-
-        # ── 2. Fetch MR diff ───────────────────────────────────────────────
+        # ── 1. Fetch MR diff ───────────────────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Fetching diff...")
         changes = await gitlab.get_mr_changes(project_id, mr_iid)
         relevant = _filter_relevant_files(changes)
