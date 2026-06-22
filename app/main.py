@@ -235,6 +235,7 @@ async def process_mr(
             changed_files=relevant,
             gherkin=gherkin,
             playwright=playwright,
+            code_analysis=code_analysis,
         )
         await gitlab.commit_file(
             project_id=project_id,

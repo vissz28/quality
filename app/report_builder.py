@@ -1,5 +1,65 @@
+from __future__ import annotations
+
+import re
 from datetime import datetime, timezone
 import html as html_lib
+
+
+def _render_analysis_tab(analysis: str) -> str:
+    """Convert the developer-agent markdown analysis to a styled HTML tab."""
+    escaped = html_lib.escape(analysis)
+
+    # Highlight the change tree block (lines starting with 📁 📄 ↳)
+    lines = escaped.split("\n")
+    rendered = []
+    in_tree = False
+    for line in lines:
+        stripped = line.strip()
+        if any(stripped.startswith(p) for p in ("📁", "📄", "↳")):
+            in_tree = True
+            indent = len(line) - len(line.lstrip())
+            pad = "&nbsp;" * indent
+            if stripped.startswith("📁"):
+                rendered.append(f'<div class="tree-line tree-folder">{pad}{stripped}</div>')
+            elif stripped.startswith("📄"):
+                rendered.append(f'<div class="tree-line tree-file">{pad}{stripped}</div>')
+            elif stripped.startswith("↳"):
+                key, _, val = stripped[1:].partition(":")
+                rendered.append(
+                    f'<div class="tree-line tree-detail">{pad}'
+                    f'<span class="tree-key">↳{key}:</span>'
+                    f'<span class="tree-val">{val}</span></div>'
+                )
+        else:
+            if in_tree and stripped == "":
+                in_tree = False
+            # Bold **text**
+            line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
+            # Section headings (### ...)
+            if stripped.startswith("###"):
+                rendered.append(f'<h3 class="analysis-heading">{stripped[3:].strip()}</h3>')
+            elif stripped.startswith("##"):
+                rendered.append(f'<h2 class="analysis-heading">{stripped[2:].strip()}</h2>')
+            else:
+                rendered.append(f"<p>{line}</p>" if line.strip() else "<br>")
+
+    body = "\n".join(rendered)
+    return f"""
+      <!-- Analysis tab -->
+      <div id="tab-analysis" class="tab-content">
+        <style>
+          .tree-line {{ font-family: var(--font-mono); font-size: 12px; line-height: 1.8; white-space: pre; }}
+          .tree-folder {{ color: var(--blue); font-weight: 600; }}
+          .tree-file {{ color: var(--text); }}
+          .tree-detail {{ color: var(--muted); }}
+          .tree-key {{ color: var(--accent); margin-right: 4px; }}
+          .tree-val {{ color: var(--text); }}
+          .tree-block {{ background: #0d1117; border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; }}
+          .analysis-heading {{ color: var(--blue); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin: 20px 0 8px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }}
+          #tab-analysis p {{ font-size: 13px; color: var(--text); margin: 4px 0; line-height: 1.6; }}
+        </style>
+        <div class="tree-block">{body}</div>
+      </div>"""
 
 
 class ReportBuilder:
@@ -14,6 +74,7 @@ class ReportBuilder:
         changed_files: list[dict],
         gherkin: str,
         playwright: str,
+        code_analysis: str | None = None,
     ) -> str:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         scenario_count = gherkin.count("Scenario")
@@ -33,11 +94,13 @@ class ReportBuilder:
 
         gherkin_escaped = html_lib.escape(gherkin)
         playwright_escaped = html_lib.escape(playwright)
+        analysis_escaped = html_lib.escape(code_analysis or "")
         mr_title_escaped = html_lib.escape(mr_title)
         mr_url_escaped = html_lib.escape(mr_url)
         author_escaped = html_lib.escape(author)
         source_escaped = html_lib.escape(source_branch)
         target_escaped = html_lib.escape(target_branch)
+        analysis_tab_html = _render_analysis_tab(code_analysis) if code_analysis else ""
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -384,6 +447,7 @@ class ReportBuilder:
         <div class="tab" onclick="switchTab('playwright', this)">
           <span class="tab-icon">🎭</span>Playwright
         </div>
+        {f'<div class="tab" onclick="switchTab(\'analysis\', this)"><span class="tab-icon">🔍</span>Analysis</div>' if code_analysis else ""}
       </div>
 
       <!-- Gherkin tab -->
@@ -409,6 +473,8 @@ class ReportBuilder:
         </div>
         <pre><code id="playwright-code">{playwright_escaped}</code></pre>
       </div>
+
+      {analysis_tab_html}
 
       <footer class="footer">
         AI Test Generator · MR !{mr_iid} · {now}
