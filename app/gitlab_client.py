@@ -136,20 +136,31 @@ class GitLabClient:
         content: str,
         commit_message: str,
     ) -> None:
-        """Create or update a file via the GitLab Commits API."""
+        """Create or update a file via the GitLab Commits API (actions endpoint)."""
         encoded_path = file_path.replace("/", "%2F")
-        url = f"{self.base}/projects/{project_id}/repository/files/{encoded_path}"
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Determine whether to create or update
+            check = await client.get(
+                f"{self.base}/projects/{project_id}/repository/files/{encoded_path}",
+                headers=self.headers,
+                params={"ref": branch},
+            )
+            action = "update" if check.status_code == 200 else "create"
 
-        payload = {
-            "branch": branch,
-            "content": content,
-            "commit_message": commit_message,
-            "encoding": "text",
-        }
-
-        async with httpx.AsyncClient(timeout=20) as client:
-            # Try update first, fallback to create
-            r = await client.put(url, headers=self.headers, json=payload)
-            if r.status_code == 400:
-                r = await client.post(url, headers=self.headers, json=payload)
+            r = await client.post(
+                f"{self.base}/projects/{project_id}/repository/commits",
+                headers=self.headers,
+                json={
+                    "branch": branch,
+                    "commit_message": commit_message,
+                    "actions": [
+                        {
+                            "action": action,
+                            "file_path": file_path,
+                            "content": base64.b64encode(content.encode()).decode(),
+                            "encoding": "base64",
+                        }
+                    ],
+                },
+            )
             r.raise_for_status()

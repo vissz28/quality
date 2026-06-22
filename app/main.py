@@ -155,7 +155,7 @@ async def process_mr(
             await _set_status("failed", "Pipeline failed — fix it before generating tests.")
             await gitlab.post_mr_comment(
                 project_id, mr_iid,
-                "⚠️ **AI Test Generator** skipped: the pipeline is failing on this branch.\n\n"
+                "❌ **AI Test Generator** failed: the pipeline is failing on this branch.\n\n"
                 "Fix the pipeline first, then push a new commit to trigger test generation."
             )
             return
@@ -212,7 +212,7 @@ async def process_mr(
 
         # ── 7. Post bot comment ────────────────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Posting comment...")
-        report_url = f"{project_web_url}/-/raw/{source_branch}/test-reports/mr-{mr_iid}-tests.html"
+        report_url = f"{project_web_url}/-/blob/{source_branch}/test-reports/mr-{mr_iid}-tests.html"
         comment_md = CommentBuilder.build(
             mr_iid=mr_iid,
             mr_title=mr_title,
@@ -224,7 +224,7 @@ async def process_mr(
         await gitlab.post_mr_comment(project_id, mr_iid, comment_md)
 
         # ── 7. Commit HTML report to branch ───────────────────────────────
-        logger.info(f"[MR !{mr_iid}] Committing HTML report...")
+        logger.info(f"[MR !{mr_iid}] Committing HTML report to '{source_branch}'...")
         html_report = ReportBuilder.build(
             mr_iid=mr_iid,
             mr_title=mr_title,
@@ -244,6 +244,7 @@ async def process_mr(
             content=html_report,
             commit_message=f"chore(tests): AI-generated report for MR !{mr_iid} [skip ci]",
         )
+        logger.info(f"[MR !{mr_iid}] HTML report committed successfully.")
 
         await _set_status("success", "Tests generated — review before merging.", report_url)
         logger.info(f"[MR !{mr_iid}] ✅ Done.")

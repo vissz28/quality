@@ -1,8 +1,13 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Add these jobs to your project's .gitlab-ci.yml.
 #
-# Stage 1: your normal pipeline (lint, test, build, etc.)
-# Stage 2: ai-test — depends on stage 1, blocks merge until AI finishes
+# How it works:
+#   Stage 1 (test): your normal pipeline — lint, test, build, etc.
+#   Stage 2 (ai-test): runs ONLY if stage 1 passes. Triggers the AI bot,
+#                      waits for the HTML report, and blocks merge until done.
+#
+# To block merge until both pipelines pass:
+#   Settings → Merge requests → "Pipelines must succeed" ✓
 #
 # Required CI/CD variables (Settings → CI/CD → Variables):
 #   AI_GENERATOR_URL   URL of the quality bot, e.g. https://mr-test-generator.onrender.com
@@ -10,33 +15,30 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 stages:
-  - test        # your existing stages go here
-  - ai-test     # add this stage after your pipeline passes
+  - test        # ← your existing stages go here
+  - ai-test     # ← runs only after ALL jobs in 'test' stage succeed
 
 # ── AI Test Generator ─────────────────────────────────────────────────────────
 #
 # This job:
-#   1. Triggers the AI bot to generate Gherkin + Playwright tests for this MR
+#   1. Triggers the AI bot (fails immediately if bot returns non-200)
 #   2. Polls until the HTML report is committed to the branch (max 10 min)
 #   3. Downloads the report and publishes it as a pipeline artifact
-#   4. Blocks merge until complete — configure in Settings → Merge requests →
-#      "Pipelines must succeed" or add "AI Test Generator" as a required check
 #
 ai-test-generator:
   stage: ai-test
   image: alpine:3.19
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-  needs:
-    - job: your-lint-job        # ← replace with your actual job names
-    - job: your-test-job        # ← replace with your actual job names
+      when: on_success    # only runs if all previous stages passed
   before_script:
     - apk add --no-cache curl jq
+
   script:
-    # ── 1. Trigger the AI bot ────────────────────────────────────────────────
+    # ── 1. Trigger the AI bot — fail immediately on non-200 ──────────────────
     - echo "→ Triggering AI Test Generator..."
     - |
-      curl -sf \
+      HTTP_STATUS=$(curl -s -o /tmp/bot_response.json -w "%{http_code}" \
         -X POST "$AI_GENERATOR_URL/webhook/gitlab" \
         -H "X-Gitlab-Token: $AI_WEBHOOK_SECRET" \
         -H "Content-Type: application/json" \
@@ -57,8 +59,13 @@ ai-test-generator:
             \"url\": \"$CI_PROJECT_URL/-/merge_requests/$CI_MERGE_REQUEST_IID\"
           },
           \"user\": {\"name\": \"$GITLAB_USER_LOGIN\"}
-        }"
-    - echo "✓ Bot triggered."
+        }")
+      echo "  Bot response: HTTP $HTTP_STATUS — $(cat /tmp/bot_response.json)"
+      if [ "$HTTP_STATUS" != "200" ]; then
+        echo "✗ Bot returned HTTP $HTTP_STATUS — aborting."
+        exit 1
+      fi
+    - echo "✓ Bot accepted the request."
 
     # ── 2. Poll for the HTML report (max 10 min, every 20s) ─────────────────
     - echo "→ Waiting for AI report..."
