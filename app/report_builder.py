@@ -94,7 +94,6 @@ class ReportBuilder:
 
         gherkin_escaped = html_lib.escape(gherkin)
         playwright_escaped = html_lib.escape(playwright)
-        analysis_escaped = html_lib.escape(code_analysis or "")
         mr_title_escaped = html_lib.escape(mr_title)
         mr_url_escaped = html_lib.escape(mr_url)
         author_escaped = html_lib.escape(author)
@@ -447,7 +446,7 @@ class ReportBuilder:
         <div class="tab" onclick="switchTab('playwright', this)">
           <span class="tab-icon">🎭</span>Playwright
         </div>
-        {f'<div class="tab" onclick="switchTab(\'analysis\', this)"><span class="tab-icon">🔍</span>Analysis</div>' if code_analysis else ""}
+        {'<div class="tab" onclick="switchTab(\'analysis\', this)"><span class="tab-icon">🔍</span>Analysis</div>' if code_analysis else ""}
       </div>
 
       <!-- Gherkin tab -->
