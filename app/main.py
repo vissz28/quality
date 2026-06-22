@@ -188,12 +188,12 @@ async def process_mr(
     mr_url: str,
     commit_sha: str = "",
 ):
-    key = (project_id, commit_sha)
-    if commit_sha and key in _processing:
-        logger.info(f"[MR !{mr_iid}] Commit {commit_sha[:8]} already in progress — skipping duplicate.")
+    # Dedup key: prefer commit SHA (specific), fall back to MR IID (always present).
+    key = (project_id, commit_sha if commit_sha else f"mr-{mr_iid}")
+    if key in _processing:
+        logger.info(f"[MR !{mr_iid}] Already in progress — skipping duplicate.")
         return
-    if commit_sha:
-        _processing.add(key)
+    _processing.add(key)
 
     gitlab = GitLabClient()
     generator = TestGenerator()
@@ -218,11 +218,11 @@ async def process_mr(
             logger.warning(f"[MR !{mr_iid}] Failed to update comment")
 
     try:
-        # Guard: skip if already done for this commit.
+        # Guard: skip if another process already started or finished this commit.
         if commit_sha:
             existing = await gitlab.get_commit_status(project_id, commit_sha)
-            if existing == "success":
-                logger.info(f"[MR !{mr_iid}] Commit {commit_sha[:8]} already succeeded — skipping.")
+            if existing in ("running", "success"):
+                logger.info(f"[MR !{mr_iid}] Commit {commit_sha[:8]} already {existing} — skipping.")
                 return
 
         await _set_status("running", "Generating tests…")
