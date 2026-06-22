@@ -49,32 +49,12 @@ async def gitlab_webhook(request: Request, background_tasks: BackgroundTasks):
     mr_iid = mr["iid"]
     commit_sha = mr.get("last_commit", {}).get("id", "")
 
-    # Native GitLab MR webhook fires on every push, before the pipeline runs.
-    # Only the CI snippet (which runs after the pipeline passes) is authorised
-    # to trigger full test generation. Native webhooks just mark the commit as
-    # pending so the MR shows a check immediately.
-    if request.headers.get("X-Triggered-By") != "ci-pipeline":
-        logger.info(f"[MR !{mr_iid}] Native webhook received — setting status to pending.")
-        background_tasks.add_task(_mark_pending, project_id, commit_sha)
-        return JSONResponse({"status": "pending", "mr_iid": mr_iid})
-
-    logger.info(f"[MR !{mr_iid}] CI-triggered — starting test generation (action: {action}).")
-
-    background_tasks.add_task(
-        process_mr,
-        project_id=project_id,
-        project_web_url=payload["project"]["web_url"],
-        mr_iid=mr_iid,
-        mr_title=mr["title"],
-        mr_description=mr.get("description", ""),
-        source_branch=mr["source_branch"],
-        target_branch=mr["target_branch"],
-        author=payload.get("user", {}).get("name", "Unknown"),
-        mr_url=mr["url"],
-        commit_sha=commit_sha,
-    )
-
-    return JSONResponse({"status": "accepted", "mr_iid": mr_iid})
+    # MR webhook fires on every push before the pipeline runs.
+    # Mark the commit as pending so the check appears immediately in the MR,
+    # then wait for the pipeline success event to start actual generation.
+    logger.info(f"[MR !{mr_iid}] Webhook received — setting status to pending.")
+    background_tasks.add_task(_mark_pending, project_id, commit_sha)
+    return JSONResponse({"status": "pending", "mr_iid": mr_iid})
 
 
 async def _handle_pipeline_event(
@@ -82,27 +62,39 @@ async def _handle_pipeline_event(
 ) -> JSONResponse:
     attrs = payload.get("object_attributes", {})
     status = attrs.get("status")
-
-    if status != "failed":
-        return JSONResponse({"status": "ignored", "reason": f"pipeline status '{status}' not handled"})
-
     project_id = payload["project"]["id"]
+    project_web_url = payload["project"]["web_url"]
     branch = attrs.get("ref", "")
     pipeline_id = attrs.get("id")
-    pipeline_url = payload["project"]["web_url"] + f"/-/pipelines/{pipeline_id}"
-
-    # MR IID may be in the payload directly (GitLab >= 15.x)
+    commit_sha = payload.get("commit", {}).get("id", "")
     mr_iid = (payload.get("merge_request") or {}).get("iid")
 
-    background_tasks.add_task(
-        notify_pipeline_failure,
-        project_id=project_id,
-        branch=branch,
-        pipeline_id=pipeline_id,
-        pipeline_url=pipeline_url,
-        mr_iid=mr_iid,
-    )
-    return JSONResponse({"status": "accepted", "pipeline_id": pipeline_id})
+    if status == "success":
+        logger.info(f"[Pipeline {pipeline_id}] Succeeded on '{branch}' — triggering test generation.")
+        background_tasks.add_task(
+            _generate_from_pipeline,
+            project_id=project_id,
+            project_web_url=project_web_url,
+            branch=branch,
+            commit_sha=commit_sha,
+            mr_iid=mr_iid,
+        )
+        return JSONResponse({"status": "accepted", "pipeline_id": pipeline_id})
+
+    if status == "failed":
+        pipeline_url = project_web_url + f"/-/pipelines/{pipeline_id}"
+        background_tasks.add_task(
+            notify_pipeline_failure,
+            project_id=project_id,
+            branch=branch,
+            pipeline_id=pipeline_id,
+            pipeline_url=pipeline_url,
+            mr_iid=mr_iid,
+            commit_sha=commit_sha,
+        )
+        return JSONResponse({"status": "accepted", "pipeline_id": pipeline_id})
+
+    return JSONResponse({"status": "ignored", "reason": f"pipeline status '{status}' not handled"})
 
 
 async def _mark_pending(project_id: int, commit_sha: str) -> None:
@@ -117,12 +109,46 @@ async def _mark_pending(project_id: int, commit_sha: str) -> None:
         logger.warning(f"Failed to set pending status for commit {commit_sha[:8]}")
 
 
+async def _generate_from_pipeline(
+    project_id: int,
+    project_web_url: str,
+    branch: str,
+    commit_sha: str,
+    mr_iid: int | None,
+) -> None:
+    """Triggered by a pipeline success event — looks up the MR and runs generation."""
+    gitlab = GitLabClient()
+    try:
+        if not mr_iid:
+            mr_iid = await gitlab.get_open_mr_for_branch(project_id, branch)
+        if not mr_iid:
+            logger.info(f"[Pipeline] No open MR for branch '{branch}' — skipping.")
+            return
+
+        mr = await gitlab.get_mr_details(project_id, mr_iid)
+        await process_mr(
+            project_id=project_id,
+            project_web_url=project_web_url,
+            mr_iid=mr_iid,
+            mr_title=mr.get("title", ""),
+            mr_description=mr.get("description", "") or "",
+            source_branch=mr.get("source_branch", branch),
+            target_branch=mr.get("target_branch", "main"),
+            author=mr.get("author", {}).get("name", "Unknown"),
+            mr_url=mr.get("web_url", ""),
+            commit_sha=commit_sha,
+        )
+    except Exception as e:
+        logger.exception(f"[Pipeline] Failed to generate tests for branch '{branch}': {e}")
+
+
 async def notify_pipeline_failure(
     project_id: int,
     branch: str,
     pipeline_id: int,
     pipeline_url: str,
     mr_iid: int | None,
+    commit_sha: str = "",
 ) -> None:
     gitlab = GitLabClient()
     try:
@@ -132,6 +158,12 @@ async def notify_pipeline_failure(
         if not mr_iid:
             logger.info(f"[Pipeline {pipeline_id}] No open MR found for branch '{branch}', skipping.")
             return
+
+        if commit_sha:
+            await gitlab.set_commit_status(
+                project_id, commit_sha, "failed",
+                "Pipeline failed — fix it before tests can be generated.",
+            )
 
         comment = (
             f"## ❌ Pipeline Failed\n\n"

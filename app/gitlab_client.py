@@ -13,6 +13,14 @@ class GitLabClient:
 
     # ── MR ───────────────────────────────────────────────────────────────────
 
+    async def get_mr_details(self, project_id: int, mr_iid: int) -> dict:
+        """Return full MR metadata (title, branches, author, url)."""
+        url = f"{self.base}/projects/{project_id}/merge_requests/{mr_iid}"
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url, headers=self.headers)
+            r.raise_for_status()
+            return r.json()
+
     async def get_mr_changes(self, project_id: int, mr_iid: int) -> list[dict]:
         """Return list of changed files with diff text."""
         url = f"{self.base}/projects/{project_id}/merge_requests/{mr_iid}/changes"

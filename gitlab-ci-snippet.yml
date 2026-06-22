@@ -1,87 +1,22 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Add these jobs to your project's .gitlab-ci.yml.
+# No changes to your .gitlab-ci.yml are required.
 #
-# How it works:
-#   Stage 1 (test): your normal pipeline — lint, test, build, etc.
-#   Stage 2 (ai-test): runs ONLY if stage 1 passes. Triggers the AI bot,
-#                      waits for it to finish, fails the pipeline if it fails.
+# The AI Test Generator is triggered automatically by GitLab pipeline events.
+# Just configure ONE webhook in your project:
 #
-# To block merge until both pipelines pass:
+#   Settings → Webhooks → Add new webhook
+#     URL:         https://<your-bot>.onrender.com/webhook/gitlab
+#     Secret:      <same value as GITLAB_WEBHOOK_SECRET on the bot>
+#     Triggers:    ✓ Merge request events
+#                  ✓ Pipeline events
+#
+# Flow:
+#   1. Developer pushes → MR webhook → AI Test Generator: ⏳ pending
+#   2. Your CI pipeline runs (lint, test, build, ...)
+#   3a. Pipeline passes  → pipeline event → bot generates tests → ✅ success + MR comment
+#   3b. Pipeline fails   → pipeline event → bot sets ❌ failed  + MR comment
+#
+# To block merge until BOTH your pipeline AND AI tests pass:
 #   Settings → Merge requests → "Pipelines must succeed" ✓
-#
-# Required CI/CD variables (Settings → CI/CD → Variables):
-#   AI_GENERATOR_URL   URL of the quality bot, e.g. https://mr-test-generator.onrender.com
-#   AI_WEBHOOK_SECRET  Same value as GITLAB_WEBHOOK_SECRET on the bot
+#   Settings → Merge requests → Required status checks → "AI Test Generator" ✓
 # ─────────────────────────────────────────────────────────────────────────────
-
-stages:
-  - test        # ← your existing stages go here
-  - ai-test     # ← runs only after ALL jobs in 'test' stage succeed
-
-ai-test-generator:
-  stage: ai-test
-  image: alpine:3.19
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      when: on_success    # only runs if all previous stages passed
-  before_script:
-    - apk add --no-cache curl jq
-
-  script:
-    # ── 1. Trigger the AI bot — fail immediately on non-200 ──────────────────
-    - echo "→ Triggering AI Test Generator..."
-    - |
-      HTTP_STATUS=$(curl -s -o /tmp/bot_response.json -w "%{http_code}" \
-        -X POST "$AI_GENERATOR_URL/webhook/gitlab" \
-        -H "X-Gitlab-Token: $AI_WEBHOOK_SECRET" \
-        -H "X-Triggered-By: ci-pipeline" \
-        -H "Content-Type: application/json" \
-        -d "{
-          \"object_kind\": \"merge_request\",
-          \"project\": {
-            \"id\": $CI_PROJECT_ID,
-            \"web_url\": \"$CI_PROJECT_URL\"
-          },
-          \"object_attributes\": {
-            \"iid\": $CI_MERGE_REQUEST_IID,
-            \"title\": \"$CI_MERGE_REQUEST_TITLE\",
-            \"description\": \"\",
-            \"action\": \"update\",
-            \"source_branch\": \"$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME\",
-            \"target_branch\": \"$CI_MERGE_REQUEST_TARGET_BRANCH_NAME\",
-            \"last_commit\": {\"id\": \"$CI_COMMIT_SHA\"},
-            \"url\": \"$CI_PROJECT_URL/-/merge_requests/$CI_MERGE_REQUEST_IID\"
-          },
-          \"user\": {\"name\": \"$GITLAB_USER_LOGIN\"}
-        }")
-      echo "  Bot response: HTTP $HTTP_STATUS — $(cat /tmp/bot_response.json)"
-      if [ "$HTTP_STATUS" != "200" ]; then
-        echo "✗ Bot returned HTTP $HTTP_STATUS — aborting."
-        exit 1
-      fi
-    - echo "✓ Bot accepted the request."
-
-    # ── 2. Poll commit status until success or failed (max 10 min) ──────────
-    - echo "→ Waiting for AI Test Generator to finish..."
-    - |
-      for i in $(seq 1 30); do
-        BOT_STATUS=$(curl -sf \
-          --header "PRIVATE-TOKEN: $CI_JOB_TOKEN" \
-          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/repository/commits/$CI_COMMIT_SHA/statuses" \
-          | jq -r '[.[] | select(.name == "AI Test Generator")] | first | .status // "pending"' \
-          2>/dev/null || echo "pending")
-        echo "  Attempt $i/30 — AI status: $BOT_STATUS"
-        if [ "$BOT_STATUS" = "success" ]; then
-          echo "✓ Tests generated successfully. See MR comments for results."
-          exit 0
-        fi
-        if [ "$BOT_STATUS" = "failed" ]; then
-          echo "✗ AI Test Generator failed. See MR comments for details."
-          exit 1
-        fi
-        if [ "$i" -eq 30 ]; then
-          echo "✗ Timed out after 10 minutes."
-          exit 1
-        fi
-        sleep 20
-      done
