@@ -1,8 +1,7 @@
+import os
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-
-from .config import settings
 
 
 class GitlabTokenMiddleware(BaseHTTPMiddleware):
@@ -12,8 +11,8 @@ class GitlabTokenMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in self.PROTECTED_PATHS:
-            secret = request.query_params.get("secret", "")
-            if secret != settings.GITLAB_WEBHOOK_SECRET:
+            secret = request.headers.get("X-Gitlab-Token", "")
+            if secret != os.environ.get("GITLAB_WEBHOOK_SECRET", ""):
                 return JSONResponse(
                     {"detail": "Invalid webhook secret"}, status_code=401
                 )

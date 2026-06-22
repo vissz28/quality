@@ -44,5 +44,6 @@ publish-ai-test-report:
 #
 # ─── Webhook URL ──────────────────────────────────────────────────────────────
 # Configure the GitLab webhook to call:
-#   https://<your-service>/webhook/gitlab?secret=<GITLAB_WEBHOOK_SECRET>
-# The secret is passed as a query param, not a header.
+#   https://<your-service>/webhook/gitlab
+# In GitLab → Settings → Webhooks → Secret token, set the same value as
+# GITLAB_WEBHOOK_SECRET. GitLab sends it as the X-Gitlab-Token header.

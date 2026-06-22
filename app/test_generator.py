@@ -1,5 +1,4 @@
 import anthropic
-from .config import settings
 
 MODEL = "claude-sonnet-4-6"
 
@@ -34,7 +33,7 @@ Rules:
 
 class TestGenerator:
     def __init__(self):
-        self.client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        self.client = anthropic.AsyncAnthropic()
 
     async def generate_gherkin(
         self,

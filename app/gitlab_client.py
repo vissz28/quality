@@ -1,13 +1,13 @@
 import base64
+import os
 import httpx
-from .config import settings
 
 
 class GitLabClient:
     def __init__(self):
-        self.base = settings.GITLAB_URL.rstrip("/") + "/api/v4"
+        self.base = os.environ["GITLAB_URL"].rstrip("/") + "/api/v4"
         self.headers = {
-            "PRIVATE-TOKEN": settings.GITLAB_TOKEN,
+            "PRIVATE-TOKEN": os.environ["GITLAB_TOKEN"],
             "Content-Type": "application/json",
         }
 
