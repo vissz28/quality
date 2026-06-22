@@ -206,70 +206,77 @@ async def process_mr(
             except Exception:
                 logger.warning(f"[MR !{mr_iid}] Failed to set commit status '{state}'")
 
+    # note_id tracks the live comment so we can edit it in place at each step.
+    note_id: int | None = None
+
+    async def _update(body: str) -> None:
+        if note_id is None:
+            return
+        try:
+            await gitlab.edit_mr_comment(project_id, mr_iid, note_id, body)
+        except Exception:
+            logger.warning(f"[MR !{mr_iid}] Failed to update comment")
+
     try:
-        # Guard: if this commit already succeeded (e.g. after a server restart),
-        # don't regenerate — tests are already committed and the status is green.
+        # Guard: skip if already done for this commit.
         if commit_sha:
             existing = await gitlab.get_commit_status(project_id, commit_sha)
             if existing == "success":
-                logger.info(f"[MR !{mr_iid}] Commit {commit_sha[:8]} already has success status — skipping.")
+                logger.info(f"[MR !{mr_iid}] Commit {commit_sha[:8]} already succeeded — skipping.")
                 return
 
         await _set_status("running", "Generating tests…")
 
-        # ── 1. Fetch MR diff ───────────────────────────────────────────────
+        # ── 1. Fetch diff — bail early before posting any comment ─────────
         logger.info(f"[MR !{mr_iid}] Fetching diff...")
         changes = await gitlab.get_mr_changes(project_id, mr_iid)
         relevant = _filter_relevant_files(changes)
-
         if not relevant:
-            logger.info(f"[MR !{mr_iid}] No relevant files found, skipping.")
+            logger.info(f"[MR !{mr_iid}] No relevant files — skipping.")
             return
 
-        # ── 3. Build diff-focused file contents ────────────────────────────
-        # Use only the changed hunks per file — not the full file content.
-        # For new files (no previous version), include full diff as context.
+        # ── 2. Open live comment ───────────────────────────────────────────
+        try:
+            note_id = await gitlab.post_mr_comment(project_id, mr_iid, CommentBuilder.starting())
+        except Exception:
+            logger.warning(f"[MR !{mr_iid}] Could not post initial comment")
+
+        # ── 3. Build diff-focused file contents ───────────────────────────
         file_contents: dict[str, str] = {}
         for file in relevant[:10]:
             diff = file.get("diff", "")
             if diff:
                 file_contents[file["new_path"]] = _extract_changed_lines(diff)
 
-        # ── 3. Fetch example tests for style reference (R2) ──────────────────
+        # ── 4. Fetch example tests ─────────────────────────────────────────
         example_tests = await gitlab.get_example_tests(project_id, target_branch)
-        if example_tests:
-            logger.info(f"[MR !{mr_iid}] {len(example_tests)} example test(s) found.")
 
-        # ── 4. Developer Agent — code analysis brief ──────────────────────
+        # ── 5. Developer agent ─────────────────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Analysing code (developer-agent)...")
         diff_text = _format_diff(relevant)
-        code_analysis = await analyzer.analyze(
-            mr_title, mr_description, diff_text, file_contents
-        )
+        code_analysis = await analyzer.analyze(mr_title, mr_description, diff_text, file_contents)
         if code_analysis:
-            logger.info(f"[MR !{mr_iid}] Code analysis ready.")
+            await _update(CommentBuilder.analysed(code_analysis))
         else:
             logger.warning(f"[MR !{mr_iid}] Code analysis failed — proceeding without it.")
 
-        # ── 5. Generate Gherkin with AI ────────────────────────────────────
+        # ── 6. Generate Gherkin ────────────────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Generating Gherkin...")
         gherkin = await generator.generate_gherkin(
             mr_title, mr_description, diff_text, file_contents,
-            example_tests=example_tests,
-            code_analysis=code_analysis,
+            example_tests=example_tests, code_analysis=code_analysis,
         )
+        await _update(CommentBuilder.gherkin_ready(code_analysis, gherkin))
 
-        # ── 6. Generate Playwright with AI ─────────────────────────────────
+        # ── 7. Generate Playwright ─────────────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Generating Playwright...")
         playwright = await generator.generate_playwright(
             mr_title, diff_text, gherkin, file_contents,
-            example_tests=example_tests,
-            code_analysis=code_analysis,
+            example_tests=example_tests, code_analysis=code_analysis,
         )
 
-        # ── 7. Post results as MR comment ─────────────────────────────────
-        logger.info(f"[MR !{mr_iid}] Posting comment...")
-        comment_md = CommentBuilder.build(
+        # ── 8. Final comment update ────────────────────────────────────────
+        final = CommentBuilder.build(
             mr_iid=mr_iid,
             mr_title=mr_title,
             changed_files=[f["new_path"] for f in relevant],
@@ -277,7 +284,13 @@ async def process_mr(
             playwright=playwright,
             code_analysis=code_analysis,
         )
-        await gitlab.post_mr_comment(project_id, mr_iid, comment_md)
+        if note_id:
+            await _update(final)
+        else:
+            try:
+                await gitlab.post_mr_comment(project_id, mr_iid, final)
+            except Exception:
+                pass
 
         await _set_status("success", "Tests generated — review before merging.", mr_url)
         logger.info(f"[MR !{mr_iid}] ✅ Done.")
@@ -285,12 +298,12 @@ async def process_mr(
     except Exception as e:
         logger.exception(f"[MR !{mr_iid}] ❌ Failed: {e}")
         await _set_status("failed", f"Test generation failed: {str(e)[:100]}")
-        error_comment = (
-            f"⚠️ **AI Test Generator** failed to process this MR.\n\n"
-            f"```\n{str(e)}\n```"
-        )
+        error_body = f"❌ **AI Test Generator** failed.\n\n```\n{str(e)}\n```"
         try:
-            await gitlab.post_mr_comment(project_id, mr_iid, error_comment)
+            if note_id:
+                await gitlab.edit_mr_comment(project_id, mr_iid, note_id, error_body)
+            else:
+                await gitlab.post_mr_comment(project_id, mr_iid, error_body)
         except Exception:
             pass
     finally:

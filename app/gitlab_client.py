@@ -29,11 +29,19 @@ class GitLabClient:
             r.raise_for_status()
             return r.json().get("changes", [])
 
-    async def post_mr_comment(self, project_id: int, mr_iid: int, body: str) -> None:
-        """Post a note (comment) on the MR."""
+    async def post_mr_comment(self, project_id: int, mr_iid: int, body: str) -> int:
+        """Post a note on the MR and return its ID."""
         url = f"{self.base}/projects/{project_id}/merge_requests/{mr_iid}/notes"
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(url, headers=self.headers, json={"body": body})
+            r.raise_for_status()
+            return r.json()["id"]
+
+    async def edit_mr_comment(self, project_id: int, mr_iid: int, note_id: int, body: str) -> None:
+        """Edit an existing MR note in place."""
+        url = f"{self.base}/projects/{project_id}/merge_requests/{mr_iid}/notes/{note_id}"
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.put(url, headers=self.headers, json={"body": body})
             r.raise_for_status()
 
     async def get_latest_pipeline_status(
