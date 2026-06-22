@@ -15,9 +15,10 @@ _VERSION = (Path(__file__).parent.parent / "VERSION").read_text().strip()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Commits currently being processed — prevents duplicate runs from CI retries
-# or near-simultaneous webhook calls for the same SHA.
+# _processing: keys currently being worked on (cleared after each run)
+# _done: keys that finished successfully (never cleared — survives retries)
 _processing: set[tuple[int, str]] = set()
+_done: set[tuple[int, str]] = set()
 
 app = FastAPI(title="MR Test Generator", version="1.0.0")
 app.add_middleware(GitlabTokenMiddleware)
@@ -188,10 +189,9 @@ async def process_mr(
     mr_url: str,
     commit_sha: str = "",
 ):
-    # Dedup key: prefer commit SHA (specific), fall back to MR IID (always present).
     key = (project_id, commit_sha if commit_sha else f"mr-{mr_iid}")
-    if key in _processing:
-        logger.info(f"[MR !{mr_iid}] Already in progress — skipping duplicate.")
+    if key in _done or key in _processing:
+        logger.info(f"[MR !{mr_iid}] Already {'done' if key in _done else 'in progress'} — skipping.")
         return
     _processing.add(key)
 
@@ -293,6 +293,7 @@ async def process_mr(
                 pass
 
         await _set_status("success", "Tests generated — review before merging.", mr_url)
+        _done.add(key)
         logger.info(f"[MR !{mr_iid}] ✅ Done.")
 
     except Exception as e:
