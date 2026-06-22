@@ -1,16 +1,17 @@
+import logging
 from pathlib import Path
+
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
-import logging
 
-_VERSION = (Path(__file__).parent.parent / "VERSION").read_text().strip()
-
-from .gitlab_client import GitLabClient
-from .test_generator import TestGenerator
 from .code_analyzer import CodeAnalyzer
 from .comment_builder import CommentBuilder
-from .report_builder import ReportBuilder
+from .gitlab_client import GitLabClient
 from .middleware import GitlabTokenMiddleware
+from .report_builder import ReportBuilder
+from .test_generator import TestGenerator
+
+_VERSION = (Path(__file__).parent.parent / "VERSION").read_text().strip()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
