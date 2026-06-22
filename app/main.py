@@ -1,6 +1,9 @@
+from pathlib import Path
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 import logging
+
+_VERSION = (Path(__file__).parent.parent / "VERSION").read_text().strip()
 
 from .gitlab_client import GitLabClient
 from .test_generator import TestGenerator
@@ -17,7 +20,7 @@ app.add_middleware(GitlabTokenMiddleware)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": _VERSION}
 
 
 @app.post("/webhook/gitlab")
