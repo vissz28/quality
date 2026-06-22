@@ -1,34 +1,23 @@
+import re
 import anthropic
+from pathlib import Path
 
 MODEL = "claude-sonnet-4-6"
 
-GHERKIN_SYSTEM = """You are an expert QA engineer specializing in BDD (Behavior-Driven Development).
-Given a GitLab Merge Request title, description, and code diff, generate Gherkin .feature file content.
+_SKILLS_FILE = Path(__file__).parent.parent / "agents" / "mr-test-generator" / "skills.md"
 
-Rules:
-- Write realistic, concrete scenarios based on actual code changes
-- Cover happy path, edge cases, and error states
-- Use Given/When/Then/And/But syntax correctly
-- Group related scenarios under Feature and, where needed, Rule blocks
-- Use scenario outlines with Examples tables for data-driven cases
-- Keep step text clear and implementation-agnostic
-- Output ONLY valid Gherkin syntax, no explanation text
-"""
 
-PLAYWRIGHT_SYSTEM = """You are an expert frontend test engineer.
-Given a Merge Request description, code diff, and Gherkin scenarios, write Playwright TypeScript tests.
+def _extract_skill(name: str) -> str:
+    """Extract content between <!-- SKILL:name --> and <!-- END:name --> in skills.md."""
+    text = _SKILLS_FILE.read_text()
+    match = re.search(rf"<!-- SKILL:{name} -->\n(.*?)<!-- END:{name} -->", text, re.DOTALL)
+    if not match:
+        raise ValueError(f"Skill block '{name}' not found in skills.md")
+    return match.group(1).strip()
 
-Rules:
-- Map each Gherkin scenario to a test() block
-- Use page object model pattern with a class per page/component
-- Use getByRole, getByLabel, getByTestId selectors (avoid CSS/XPath)
-- Include expect() assertions that match the Gherkin Then steps
-- Add meaningful test.describe() groups matching Feature/Rule blocks
-- Use test.beforeEach() for shared setup
-- Handle async properly with await everywhere
-- Output ONLY valid TypeScript + Playwright, no explanation text
-- Start output with the page object class, then the test file
-"""
+
+GHERKIN_SYSTEM = _extract_skill("GHERKIN_SYSTEM")
+PLAYWRIGHT_SYSTEM = _extract_skill("PLAYWRIGHT_SYSTEM")
 
 
 class TestGenerator:
@@ -41,14 +30,18 @@ class TestGenerator:
         mr_description: str,
         diff_text: str,
         file_contents: dict[str, str],
+        quality_context: str | None = None,
+        example_tests: list[tuple[str, str]] | None = None,
+        code_analysis: str | None = None,
     ) -> str:
+        system = _build_system(GHERKIN_SYSTEM, quality_context, example_tests, code_analysis)
         context = _build_context(mr_title, mr_description, diff_text, file_contents)
         prompt = f"{context}\n\nGenerate the Gherkin .feature file for this MR:"
 
         message = await self.client.messages.create(
             model=MODEL,
             max_tokens=4096,
-            system=GHERKIN_SYSTEM,
+            system=system,
             messages=[{"role": "user", "content": prompt}],
         )
         return message.content[0].text.strip()
@@ -59,7 +52,11 @@ class TestGenerator:
         diff_text: str,
         gherkin: str,
         file_contents: dict[str, str],
+        quality_context: str | None = None,
+        example_tests: list[tuple[str, str]] | None = None,
+        code_analysis: str | None = None,
     ) -> str:
+        system = _build_system(PLAYWRIGHT_SYSTEM, quality_context, example_tests, code_analysis)
         context = _build_context(mr_title, "", diff_text, file_contents)
         prompt = (
             f"{context}\n\n"
@@ -70,10 +67,29 @@ class TestGenerator:
         message = await self.client.messages.create(
             model=MODEL,
             max_tokens=4096,
-            system=PLAYWRIGHT_SYSTEM,
+            system=system,
             messages=[{"role": "user", "content": prompt}],
         )
         return message.content[0].text.strip()
+
+
+def _build_system(
+    base: str,
+    quality_context: str | None,
+    example_tests: list[tuple[str, str]] | None,
+    code_analysis: str | None = None,
+) -> str:
+    parts = [base]
+    if quality_context:
+        parts.append(f"## Project Conventions\n{quality_context}")
+    if example_tests:
+        examples = "\n\n".join(
+            f"### {path}\n```\n{content}\n```" for path, content in example_tests
+        )
+        parts.append(f"## Existing test style — match this\n{examples}")
+    if code_analysis:
+        parts.append(f"## Code Analysis\n{code_analysis}")
+    return "\n\n".join(parts)
 
 
 def _build_context(

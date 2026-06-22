@@ -28,6 +28,80 @@ class GitLabClient:
             r = await client.post(url, headers=self.headers, json={"body": body})
             r.raise_for_status()
 
+    async def get_open_mr_for_branch(
+        self, project_id: int, branch: str
+    ) -> int | None:
+        """Return the IID of the open MR for a branch, or None if not found."""
+        url = f"{self.base}/projects/{project_id}/merge_requests"
+        params = {"source_branch": branch, "state": "opened"}
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=self.headers, params=params)
+            if r.status_code != 200:
+                return None
+            mrs = r.json()
+            return mrs[0]["iid"] if mrs else None
+
+    # ── Commit status ─────────────────────────────────────────────────────────
+
+    async def set_commit_status(
+        self,
+        project_id: int,
+        sha: str,
+        state: str,
+        description: str,
+        target_url: str = "",
+    ) -> None:
+        """Post a commit status (pending/success/failed) to block or unblock merge."""
+        url = f"{self.base}/projects/{project_id}/statuses/{sha}"
+        payload = {
+            "state": state,
+            "name": "AI Test Generator",
+            "description": description,
+        }
+        if target_url:
+            payload["target_url"] = target_url
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(url, headers=self.headers, json=payload)
+            r.raise_for_status()
+
+    # ── Learning context (R1, R2) ─────────────────────────────────────────────
+
+    async def get_quality_context(self, project_id: int, ref: str) -> str | None:
+        """Fetch QUALITY_CONTEXT.md from the repo root (R1). Returns None if absent."""
+        return await self.get_file_content(project_id, "QUALITY_CONTEXT.md", ref)
+
+    async def get_example_tests(
+        self, project_id: int, ref: str, limit: int = 3
+    ) -> list[tuple[str, str]]:
+        """Fetch up to `limit` existing test files as style examples (R2)."""
+        url = f"{self.base}/projects/{project_id}/repository/tree"
+        patterns = ["spec", "test", "tests", "__tests__"]
+        found: list[tuple[str, str]] = []
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            for folder in patterns:
+                if len(found) >= limit:
+                    break
+                r = await client.get(
+                    url,
+                    headers=self.headers,
+                    params={"ref": ref, "path": folder, "recursive": True},
+                )
+                if r.status_code != 200:
+                    continue
+                for item in r.json():
+                    if len(found) >= limit:
+                        break
+                    path: str = item.get("path", "")
+                    if item.get("type") == "blob" and any(
+                        path.endswith(ext)
+                        for ext in (".spec.ts", ".test.ts", ".spec.py", "test_.py")
+                    ):
+                        content = await self.get_file_content(project_id, path, ref)
+                        if content:
+                            found.append((path, content[:2000]))
+        return found
+
     # ── Files ─────────────────────────────────────────────────────────────────
 
     async def get_file_content(
