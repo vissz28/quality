@@ -16,6 +16,10 @@ _VERSION = (Path(__file__).parent.parent / "VERSION").read_text().strip()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Commits currently being processed — prevents duplicate runs from CI retries
+# or near-simultaneous webhook calls for the same SHA.
+_processing: set[tuple[int, str]] = set()
+
 app = FastAPI(title="MR Test Generator", version="1.0.0")
 app.add_middleware(GitlabTokenMiddleware)
 
@@ -153,6 +157,13 @@ async def process_mr(
     mr_url: str,
     commit_sha: str = "",
 ):
+    key = (project_id, commit_sha)
+    if commit_sha and key in _processing:
+        logger.info(f"[MR !{mr_iid}] Commit {commit_sha[:8]} already in progress — skipping duplicate.")
+        return
+    if commit_sha:
+        _processing.add(key)
+
     gitlab = GitLabClient()
     generator = TestGenerator()
     analyzer = CodeAnalyzer()
@@ -165,6 +176,14 @@ async def process_mr(
                 logger.warning(f"[MR !{mr_iid}] Failed to set commit status '{state}'")
 
     try:
+        # Guard: if this commit already succeeded (e.g. after a server restart),
+        # don't regenerate — tests are already committed and the status is green.
+        if commit_sha:
+            existing = await gitlab.get_commit_status(project_id, commit_sha)
+            if existing == "success":
+                logger.info(f"[MR !{mr_iid}] Commit {commit_sha[:8]} already has success status — skipping.")
+                return
+
         await _set_status("running", "Generating tests…")
 
         # ── 1. Fetch MR diff ───────────────────────────────────────────────
@@ -267,6 +286,8 @@ async def process_mr(
             await gitlab.post_mr_comment(project_id, mr_iid, error_comment)
         except Exception:
             pass
+    finally:
+        _processing.discard(key)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

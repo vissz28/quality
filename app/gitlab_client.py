@@ -56,6 +56,21 @@ class GitLabClient:
 
     # ── Commit status ─────────────────────────────────────────────────────────
 
+    async def get_commit_status(
+        self,
+        project_id: int,
+        sha: str,
+        name: str = "AI Test Generator",
+    ) -> str | None:
+        """Return the latest status string for the named check on a commit, or None."""
+        url = f"{self.base}/projects/{project_id}/repository/commits/{sha}/statuses"
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=self.headers, params={"name": name})
+            if r.status_code != 200:
+                return None
+            statuses = r.json()
+            return statuses[0]["status"] if statuses else None
+
     async def set_commit_status(
         self,
         project_id: int,
