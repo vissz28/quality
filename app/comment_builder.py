@@ -109,7 +109,6 @@ class CommentBuilder:
             )
 
         icons = {"passed": "✅", "failed": "❌", "skipped": "⚠️"}
-        total = summary.passed + summary.failed + summary.skipped
         summary_line = (
             f"> ✅ {summary.passed} passed · ❌ {summary.failed} failed · "
             f"⚠️ {summary.skipped} skipped · {summary.duration_s}s"
