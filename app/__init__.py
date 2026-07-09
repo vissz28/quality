@@ -1,1 +1,1 @@
-# mr-test-generator app package
+# test-calibrator app package

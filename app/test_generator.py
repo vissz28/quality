@@ -4,7 +4,7 @@ from pathlib import Path
 
 MODEL = "claude-sonnet-4-6"
 
-_SKILLS_FILE = Path(__file__).parent.parent / "agents" / "mr-test-generator" / "skills.md"
+_SKILLS_FILE = Path(__file__).parent.parent / "agents" / "test-calibrator" / "SKILLS.md"
 
 
 def _extract_skill(name: str) -> str:

@@ -6,7 +6,7 @@ import html as html_lib
 
 
 def _render_analysis_tab(analysis: str) -> str:
-    """Convert the developer-agent markdown analysis to a styled HTML tab."""
+    """Convert the software-engineer markdown analysis to a styled HTML tab."""
     escaped = html_lib.escape(analysis)
 
     # Highlight the change tree block (lines starting with 📁 📄 ↳)

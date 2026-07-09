@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 
@@ -5,9 +6,11 @@ from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 
 from .code_analyzer import CodeAnalyzer
+from .code_guardian import CodeGuardian
 from .comment_builder import CommentBuilder
 from .gitlab_client import GitLabClient
 from .middleware import GitlabTokenMiddleware
+from .test_executor import TestExecutor
 from .test_generator import TestGenerator
 
 _VERSION = (Path(__file__).parent.parent / "VERSION").read_text().strip()
@@ -20,7 +23,7 @@ logger = logging.getLogger(__name__)
 _processing: set[tuple[int, str]] = set()
 _done: set[tuple[int, str]] = set()
 
-app = FastAPI(title="MR Test Generator", version="1.0.0")
+app = FastAPI(title="Test Calibrator", version="1.0.0")
 app.add_middleware(GitlabTokenMiddleware)
 
 
@@ -198,6 +201,8 @@ async def process_mr(
     gitlab = GitLabClient()
     generator = TestGenerator()
     analyzer = CodeAnalyzer()
+    guardian = CodeGuardian()
+    executor = TestExecutor()
 
     async def _set_status(state: str, description: str, url: str = "") -> None:
         if commit_sha:
@@ -251,14 +256,21 @@ async def process_mr(
         # ── 4. Fetch example tests ─────────────────────────────────────────
         example_tests = await gitlab.get_example_tests(project_id, target_branch)
 
-        # ── 5. Developer agent ─────────────────────────────────────────────
-        logger.info(f"[MR !{mr_iid}] Analysing code (developer-agent)...")
+        # ── 5. Software Engineer + Code Guardian (parallel) ───────────────
+        logger.info(f"[MR !{mr_iid}] Running software-engineer + code-guardian in parallel...")
         diff_text = _format_diff(relevant)
-        code_analysis = await analyzer.analyze(mr_title, mr_description, diff_text, file_contents)
+        code_analysis, guardian_report = await asyncio.gather(
+            analyzer.analyze(mr_title, mr_description, diff_text, file_contents),
+            guardian.review(mr_title, diff_text, file_contents),
+        )
         if code_analysis:
             await _update(CommentBuilder.analysed(code_analysis))
         else:
             logger.warning(f"[MR !{mr_iid}] Code analysis failed — proceeding without it.")
+        if guardian_report:
+            logger.info(f"[MR !{mr_iid}] Code Guardian findings ready.")
+        else:
+            logger.warning(f"[MR !{mr_iid}] Code Guardian returned no findings.")
 
         # ── 6. Generate Gherkin ────────────────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Generating Gherkin...")
@@ -283,14 +295,28 @@ async def process_mr(
             gherkin=gherkin,
             playwright=playwright,
             code_analysis=code_analysis,
+            guardian_report=guardian_report,
         )
         if note_id:
             await _update(final)
         else:
             try:
-                await gitlab.post_mr_comment(project_id, mr_iid, final)
+                note_id = await gitlab.post_mr_comment(project_id, mr_iid, final)
             except Exception:
                 pass
+
+        # ── 9. Execute tests and append results ───────────────────────────
+        logger.info(f"[MR !{mr_iid}] Running generated tests (test-executor)...")
+        execution = await executor.run(playwright)
+        results_section = CommentBuilder.execution_results(execution)
+        await _update(final + results_section)
+        if execution.execution_error:
+            logger.warning(f"[MR !{mr_iid}] Test execution error: {execution.execution_error}")
+        else:
+            logger.info(
+                f"[MR !{mr_iid}] Execution: {execution.passed} passed, "
+                f"{execution.failed} failed, {execution.skipped} skipped."
+            )
 
         await _set_status("success", "Tests generated — review before merging.", mr_url)
         _done.add(key)

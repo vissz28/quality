@@ -1,4 +1,9 @@
+from __future__ import annotations
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .test_executor import ExecutionSummary
 
 _HEADER = "## 🤖 AI Test Generator"
 
@@ -51,6 +56,7 @@ class CommentBuilder:
         gherkin: str,
         playwright: str,
         code_analysis: str | None = None,
+        guardian_report: str | None = None,
     ) -> str:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         file_list = "\n".join(f"- `{f}`" for f in changed_files[:20])
@@ -88,5 +94,45 @@ class CommentBuilder:
             f"```typescript\n{playwright}\n```\n\n"
             f"</details>\n\n"
             f"---\n\n"
+            f"{guardian_report if guardian_report else ''}"
+            f"---\n\n"
             f"> ⚠️ *Always review AI-generated tests before merging.*\n"
+        )
+
+    @staticmethod
+    def execution_results(summary: ExecutionSummary) -> str:
+        if summary.execution_error:
+            return (
+                f"---\n\n"
+                f"### 🧪 Test Execution Results\n\n"
+                f"> ⚠️ Execution error: {summary.execution_error}\n"
+            )
+
+        icons = {"passed": "✅", "failed": "❌", "skipped": "⚠️"}
+        total = summary.passed + summary.failed + summary.skipped
+        summary_line = (
+            f"> ✅ {summary.passed} passed · ❌ {summary.failed} failed · "
+            f"⚠️ {summary.skipped} skipped · {summary.duration_s}s"
+        )
+
+        rows = []
+        for r in summary.results:
+            icon = icons.get(r.status, "❓")
+            if r.status == "failed":
+                detail = f"`{r.classification}` — {r.error}" if r.error else f"`{r.classification}`"
+            else:
+                detail = "—"
+            rows.append(f"| {icon} {r.title} | {detail} |")
+
+        table = (
+            "| Test | Details |\n"
+            "|------|---------|\n"
+            + "\n".join(rows)
+        ) if rows else "_No individual test data available._"
+
+        return (
+            f"---\n\n"
+            f"### 🧪 Test Execution Results\n\n"
+            f"{summary_line}\n\n"
+            f"{table}\n"
         )

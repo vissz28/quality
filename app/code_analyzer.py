@@ -4,14 +4,14 @@ from pathlib import Path
 
 MODEL = "claude-sonnet-4-6"
 
-_SKILLS_FILE = Path(__file__).parent.parent / "agents" / "developer-agent" / "skills.md"
+_SKILLS_FILE = Path(__file__).parent.parent / "agents" / "software-engineer" / "SKILLS.md"
 
 
 def _extract_skill(name: str) -> str:
     text = _SKILLS_FILE.read_text()
     match = re.search(rf"<!-- SKILL:{name} -->\n(.*?)<!-- END:{name} -->", text, re.DOTALL)
     if not match:
-        raise ValueError(f"Skill block '{name}' not found in developer-agent/skills.md")
+        raise ValueError(f"Skill block '{name}' not found in software-engineer/SKILLS.md")
     return match.group(1).strip()
 
 
