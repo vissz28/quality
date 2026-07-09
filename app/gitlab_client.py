@@ -70,6 +70,19 @@ class GitLabClient:
             pipelines = r.json()
             return pipelines[0] if pipelines else None
 
+    async def get_mr_pipeline(
+        self, project_id: int, mr_iid: int
+    ) -> dict | None:
+        """Return the latest pipeline for an MR (detached MR pipelines included), or None."""
+        url = f"{self.base}/projects/{project_id}/merge_requests/{mr_iid}/pipelines"
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=self.headers,
+                                 params={"order_by": "id", "sort": "desc", "per_page": 1})
+            if r.status_code != 200:
+                return None
+            pipelines = r.json()
+            return pipelines[0] if pipelines else None
+
     async def get_open_mr_for_branch(
         self, project_id: int, branch: str
     ) -> int | None:

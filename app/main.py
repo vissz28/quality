@@ -162,14 +162,19 @@ async def _watch_pipeline(
                 logger.info(f"[Watcher] Commit {commit_sha[:8]} already done — exiting.")
                 return
 
-            pipeline = await gitlab.get_pipeline_for_commit(project_id, commit_sha)
+            # Prefer MR pipeline (detached) when we know the MR; fall back to SHA lookup.
+            pipeline = None
+            if mr_iid:
+                pipeline = await gitlab.get_mr_pipeline(project_id, mr_iid)
+            if not pipeline:
+                pipeline = await gitlab.get_pipeline_for_commit(project_id, commit_sha)
             if not pipeline:
                 logger.info(f"[Watcher] No pipeline found yet for {commit_sha[:8]} — waiting.")
                 continue
 
             status = pipeline.get("status")
             pipeline_id = pipeline.get("id")
-            logger.info(f"[Watcher] Commit {commit_sha[:8]} — pipeline {pipeline_id} status: {status}")
+            logger.info(f"[Watcher] Commit {commit_sha[:8]} — pipeline {pipeline_id} ({pipeline.get('source','?')}) status: {status}")
 
             if status == "success":
                 logger.info(f"[Watcher] Pipeline {pipeline_id} passed — triggering generation.")
