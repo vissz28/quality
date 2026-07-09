@@ -139,7 +139,42 @@ async def _mark_pending(project_id: int, commit_sha: str, branch: str = "", mr_i
         logger.warning(f"Failed to set pending status for commit {commit_sha[:8]}")
 
     watch_key = (project_id, commit_sha)
-    if watch_key not in _done and watch_key not in _pending_watches:
+    if watch_key in _done:
+        return
+
+    # Fast-path: pipeline may have already passed before this webhook arrived.
+    try:
+        pipeline = None
+        if mr_iid:
+            pipeline = await gitlab.get_mr_pipeline(project_id, mr_iid)
+        if not pipeline:
+            pipeline = await gitlab.get_pipeline_for_commit(project_id, commit_sha)
+        if pipeline:
+            status = pipeline.get("status")
+            logger.info(f"[MR !{mr_iid}] Immediate pipeline check: {pipeline.get('id')} status={status}")
+            if status == "success":
+                await _generate_from_pipeline(
+                    project_id=project_id,
+                    project_web_url=pipeline.get("web_url", "").rsplit("/-/", 1)[0],
+                    branch=branch,
+                    commit_sha=commit_sha,
+                    mr_iid=mr_iid,
+                )
+                return
+            if status in ("failed", "canceled"):
+                await notify_pipeline_failure(
+                    project_id=project_id,
+                    branch=branch,
+                    pipeline_id=pipeline.get("id"),
+                    pipeline_url=pipeline.get("web_url", ""),
+                    mr_iid=mr_iid,
+                    commit_sha=commit_sha,
+                )
+                return
+    except Exception:
+        logger.exception(f"[MR !{mr_iid}] Immediate pipeline check failed — falling back to watcher.")
+
+    if watch_key not in _pending_watches:
         _pending_watches[watch_key] = {"branch": branch, "mr_iid": mr_iid}
         logger.info(f"[Watcher] Registered commit {commit_sha[:8]} on branch '{branch}'.")
 
