@@ -9,11 +9,12 @@ from pathlib import Path
 TIMEOUT = 300  # 5 minutes
 
 _PLAYWRIGHT_CONFIG = """\
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   timeout: 30_000,
   retries: 0,
   reporter: 'json',
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 });
 """
 
