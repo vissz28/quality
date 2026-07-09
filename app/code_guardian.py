@@ -71,7 +71,7 @@ def _parse_json(raw: str) -> dict:
 
 
 def _format(data: dict) -> str:
-    sections = []
+    inner_sections = []
 
     for key in ("security", "security_rules", "frontend", "database", "infrastructure", "scripts", "dependencies", "integration", "style"):
         findings = data.get(key, [])
@@ -80,27 +80,31 @@ def _format(data: dict) -> str:
 
         label = _CATEGORY_LABELS[key]
         count = len(findings)
-
-        if key == "dependencies":
-            table = _dep_table(findings)
-        else:
-            table = _findings_table(findings)
+        table = _dep_table(findings) if key == "dependencies" else _findings_table(findings)
 
         if key in _EXPANDED:
-            sections.append(f"#### {label}\n\n{table}")
+            # Expanded categories render inline (no collapsible)
+            inner_sections.append(f"**{label}**\n\n{table}")
         else:
-            sections.append(
+            inner_sections.append(
                 f"<details>\n"
                 f"<summary><strong>{label}</strong> ({count})</summary>\n\n"
                 f"{table}\n\n"
                 f"</details>"
             )
 
-    if not sections:
+    if not inner_sections:
         return ""
 
-    body = "\n\n".join(sections)
-    return f"---\n\n### 🛡️ Code Guardian\n\n{body}\n"
+    total = sum(len(data.get(k, [])) for k in _CATEGORY_LABELS)
+    body = "\n\n".join(inner_sections)
+    # Return a single <details> block — comment_builder places it between other sections
+    return (
+        f"<details>\n"
+        f"<summary>🛡️ <strong>Code Guardian</strong> ({total} finding{'s' if total != 1 else ''})</summary>\n\n"
+        f"{body}\n\n"
+        f"</details>"
+    )
 
 
 def _findings_table(findings: list[dict]) -> str:

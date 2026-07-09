@@ -25,7 +25,7 @@ _processing: set[tuple[int, str]] = set()
 _done: set[tuple[int, str]] = set()
 _watching: set[tuple[int, str]] = set()
 
-WATCH_INTERVAL = 30   # seconds between polls
+WATCH_INTERVAL = 10   # seconds between polls
 WATCH_TIMEOUT  = 3600 # stop watching after 1 hour
 
 app = FastAPI(title="Test Calibrator", version="1.0.0")

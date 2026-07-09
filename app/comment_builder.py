@@ -8,6 +8,16 @@ if TYPE_CHECKING:
 _HEADER = "## 🤖 AI Test Generator"
 
 
+def _details(summary_line: str, body: str) -> str:
+    """Render a GitLab-safe collapsible block. Never place --- directly before <details>."""
+    return (
+        f"<details>\n"
+        f"<summary>{summary_line}</summary>\n\n"
+        f"{body}\n\n"
+        f"</details>"
+    )
+
+
 class CommentBuilder:
 
     @staticmethod
@@ -16,37 +26,27 @@ class CommentBuilder:
 
     @staticmethod
     def analysed(code_analysis: str) -> str:
+        block = _details("🔍 <strong>Code analysis</strong>", code_analysis)
         return (
             f"{_HEADER}\n\n"
             f"✅ Code analysed &nbsp;·&nbsp; ⏳ Generating Gherkin scenarios…\n\n"
-            f"---\n\n"
-            f"<details>\n"
-            f"<summary>🔍 <strong>Code analysis</strong></summary>\n\n"
-            f"{code_analysis}\n\n"
-            f"</details>\n"
+            f"{block}\n"
         )
 
     @staticmethod
     def gherkin_ready(code_analysis: str | None, gherkin: str) -> str:
         scenario_count = gherkin.count("Scenario")
-        analysis_block = ""
-        if code_analysis:
-            analysis_block = (
-                f"<details>\n"
-                f"<summary>🔍 <strong>Code analysis</strong></summary>\n\n"
-                f"{code_analysis}\n\n"
-                f"</details>\n\n---\n\n"
-            )
-        return (
+        parts = [
             f"{_HEADER}\n\n"
-            f"✅ Code analysed &nbsp;·&nbsp; ✅ Gherkin ready &nbsp;·&nbsp; ⏳ Generating Playwright tests…\n\n"
-            f"---\n\n"
-            f"{analysis_block}"
-            f"<details>\n"
-            f"<summary>🥒 <strong>Gherkin scenarios</strong> ({scenario_count})</summary>\n\n"
-            f"```gherkin\n{gherkin}\n```\n\n"
-            f"</details>\n"
-        )
+            f"✅ Code analysed &nbsp;·&nbsp; ✅ Gherkin ready &nbsp;·&nbsp; ⏳ Generating Playwright tests…\n"
+        ]
+        if code_analysis:
+            parts.append(_details("🔍 <strong>Code analysis</strong>", code_analysis))
+        parts.append(_details(
+            f"🥒 <strong>Gherkin scenarios</strong> ({scenario_count})",
+            f"```gherkin\n{gherkin}\n```",
+        ))
+        return "\n\n".join(parts) + "\n"
 
     @staticmethod
     def build(
@@ -63,50 +63,39 @@ class CommentBuilder:
         scenario_count = gherkin.count("Scenario")
         test_count = playwright.count("test(")
 
-        analysis_section = ""
-        if code_analysis:
-            analysis_section = (
-                f"---\n\n"
-                f"<details>\n"
-                f"<summary>🔍 <strong>Code analysis</strong></summary>\n\n"
-                f"{code_analysis}\n\n"
-                f"</details>\n\n"
-            )
-
-        return (
+        sections = [
             f"{_HEADER}\n\n"
             f"> ✅ Done · {now} · 📄 {len(changed_files)} file(s) · "
             f"🥒 {scenario_count} scenario(s) · 🎭 {test_count} test(s)\n\n"
-            f"---\n\n"
-            f"<details>\n"
-            f"<summary>📂 <strong>Changed files</strong></summary>\n\n"
-            f"{file_list}\n"
-            f"</details>\n\n"
-            f"{analysis_section}"
-            f"---\n\n"
-            f"<details>\n"
-            f"<summary>🥒 <strong>Gherkin scenarios</strong> ({scenario_count})</summary>\n\n"
-            f"```gherkin\n{gherkin}\n```\n\n"
-            f"</details>\n\n"
-            f"---\n\n"
-            f"<details>\n"
-            f"<summary>🎭 <strong>Playwright tests</strong> ({test_count})</summary>\n\n"
-            f"```typescript\n{playwright}\n```\n\n"
-            f"</details>\n\n"
-            f"---\n\n"
-            f"{guardian_report if guardian_report else ''}"
-            f"---\n\n"
-            f"> ⚠️ *Always review AI-generated tests before merging.*\n"
-        )
+            f"---",
+
+            _details("📂 <strong>Changed files</strong>", file_list),
+        ]
+
+        if code_analysis:
+            sections.append(_details("🔍 <strong>Code analysis</strong>", code_analysis))
+
+        if guardian_report:
+            sections.append(guardian_report)
+
+        sections.append(_details(
+            f"🥒 <strong>Gherkin scenarios</strong> ({scenario_count})",
+            f"```gherkin\n{gherkin}\n```",
+        ))
+        sections.append(_details(
+            f"🎭 <strong>Playwright tests</strong> ({test_count})",
+            f"```typescript\n{playwright}\n```",
+        ))
+
+        sections.append("> ⚠️ *Always review AI-generated tests before merging.*")
+
+        return "\n\n".join(sections) + "\n"
 
     @staticmethod
     def execution_results(summary: ExecutionSummary) -> str:
         if summary.execution_error:
-            return (
-                f"---\n\n"
-                f"### 🧪 Test Execution Results\n\n"
-                f"> ⚠️ Execution error: {summary.execution_error}\n"
-            )
+            body = f"> ⚠️ Execution error: {summary.execution_error}"
+            return _details("🧪 <strong>Test Execution Results</strong>", body)
 
         icons = {"passed": "✅", "failed": "❌", "skipped": "⚠️"}
         summary_line = (
@@ -117,10 +106,7 @@ class CommentBuilder:
         rows = []
         for r in summary.results:
             icon = icons.get(r.status, "❓")
-            if r.status == "failed":
-                detail = f"`{r.classification}` — {r.error}" if r.error else f"`{r.classification}`"
-            else:
-                detail = "—"
+            detail = f"`{r.classification}` — {r.error}" if r.status == "failed" and r.error else "—"
             rows.append(f"| {icon} {r.title} | {detail} |")
 
         table = (
@@ -129,9 +115,8 @@ class CommentBuilder:
             + "\n".join(rows)
         ) if rows else "_No individual test data available._"
 
-        return (
-            f"---\n\n"
-            f"### 🧪 Test Execution Results\n\n"
-            f"{summary_line}\n\n"
-            f"{table}\n"
+        body = f"{summary_line}\n\n{table}"
+        return _details(
+            f"🧪 <strong>Test Execution Results</strong> · ✅ {summary.passed} / ❌ {summary.failed}",
+            body,
         )
