@@ -66,12 +66,18 @@ async def _handle_pipeline_event(
 ) -> JSONResponse:
     attrs = payload.get("object_attributes", {})
     status = attrs.get("status")
+    source = attrs.get("source", "")
     project_id = payload["project"]["id"]
     project_web_url = payload["project"]["web_url"]
     branch = attrs.get("ref", "")
     pipeline_id = attrs.get("id")
     commit_sha = payload.get("commit", {}).get("id", "")
     mr_iid = (payload.get("merge_request") or {}).get("iid")
+
+    # Only react to pipelines triggered by a push or an MR — ignore scheduled, tag, api, etc.
+    if source not in ("push", "merge_request_event", "web", ""):
+        logger.info(f"[Pipeline {pipeline_id}] Source '{source}' — ignoring.")
+        return JSONResponse({"status": "ignored", "reason": f"pipeline source '{source}' not handled"})
 
     if status == "success":
         logger.info(f"[Pipeline {pipeline_id}] Succeeded on '{branch}' — triggering test generation.")
@@ -127,6 +133,8 @@ async def _generate_from_pipeline(
             mr_iid = await gitlab.get_open_mr_for_branch(project_id, branch)
         if not mr_iid:
             logger.info(f"[Pipeline] No open MR for branch '{branch}' — skipping.")
+            if commit_sha:
+                await gitlab.set_commit_status(project_id, commit_sha, "success", "No MR — skipped.")
             return
 
         mr = await gitlab.get_mr_details(project_id, mr_iid)
@@ -144,6 +152,13 @@ async def _generate_from_pipeline(
         )
     except Exception as e:
         logger.exception(f"[Pipeline] Failed to generate tests for branch '{branch}': {e}")
+        if commit_sha:
+            try:
+                await gitlab.set_commit_status(
+                    project_id, commit_sha, "failed", f"Test generation error: {str(e)[:100]}"
+                )
+            except Exception:
+                pass
 
 
 async def notify_pipeline_failure(
