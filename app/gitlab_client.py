@@ -57,6 +57,19 @@ class GitLabClient:
             pipelines = r.json()
             return pipelines[0]["status"] if pipelines else None
 
+    async def get_pipeline_for_commit(
+        self, project_id: int, sha: str
+    ) -> dict | None:
+        """Return the latest pipeline object for a specific commit SHA, or None."""
+        url = f"{self.base}/projects/{project_id}/pipelines"
+        params = {"sha": sha, "order_by": "id", "sort": "desc", "per_page": 1}
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=self.headers, params=params)
+            if r.status_code != 200:
+                return None
+            pipelines = r.json()
+            return pipelines[0] if pipelines else None
+
     async def get_open_mr_for_branch(
         self, project_id: int, branch: str
     ) -> int | None:

@@ -20,8 +20,13 @@ logger = logging.getLogger(__name__)
 
 # _processing: keys currently being worked on (cleared after each run)
 # _done: keys that finished successfully (never cleared — survives retries)
+# _watching: commit SHAs actively being polled so we don't start duplicate watchers
 _processing: set[tuple[int, str]] = set()
 _done: set[tuple[int, str]] = set()
+_watching: set[tuple[int, str]] = set()
+
+WATCH_INTERVAL = 30   # seconds between polls
+WATCH_TIMEOUT  = 3600 # stop watching after 1 hour
 
 app = FastAPI(title="Test Calibrator", version="1.0.0")
 app.add_middleware(GitlabTokenMiddleware)
@@ -56,8 +61,9 @@ async def gitlab_webhook(request: Request, background_tasks: BackgroundTasks):
     # MR webhook fires on every push before the pipeline runs.
     # Mark the commit as pending so the check appears immediately in the MR,
     # then wait for the pipeline success event to start actual generation.
+    source_branch = mr.get("source_branch", "")
     logger.info(f"[MR !{mr_iid}] Webhook received — setting status to pending.")
-    background_tasks.add_task(_mark_pending, project_id, commit_sha)
+    background_tasks.add_task(_mark_pending, project_id, commit_sha, source_branch, mr_iid)
     return JSONResponse({"status": "pending", "mr_iid": mr_iid})
 
 
@@ -107,7 +113,7 @@ async def _handle_pipeline_event(
     return JSONResponse({"status": "ignored", "reason": f"pipeline status '{status}' not handled"})
 
 
-async def _mark_pending(project_id: int, commit_sha: str) -> None:
+async def _mark_pending(project_id: int, commit_sha: str, branch: str = "", mr_iid: int | None = None) -> None:
     if not commit_sha:
         return
     gitlab = GitLabClient()
@@ -117,6 +123,79 @@ async def _mark_pending(project_id: int, commit_sha: str) -> None:
         )
     except Exception:
         logger.warning(f"Failed to set pending status for commit {commit_sha[:8]}")
+
+    # Start a pipeline watcher as a fallback in case the webhook event never arrives.
+    watch_key = (project_id, commit_sha)
+    if watch_key not in _watching:
+        _watching.add(watch_key)
+        asyncio.create_task(
+            _watch_pipeline(project_id, commit_sha, branch, mr_iid),
+            name=f"watch-{commit_sha[:8]}",
+        )
+        logger.info(f"[Watcher] Started for commit {commit_sha[:8]} on branch '{branch}'.")
+
+
+async def _watch_pipeline(
+    project_id: int,
+    commit_sha: str,
+    branch: str,
+    mr_iid: int | None,
+) -> None:
+    """Poll GitLab every 30s until the pipeline for this commit completes.
+    Exits immediately if the webhook event already handled it (_done set).
+    """
+    gitlab = GitLabClient()
+    deadline = asyncio.get_event_loop().time() + WATCH_TIMEOUT
+    done_key = (project_id, commit_sha)
+
+    try:
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(WATCH_INTERVAL)
+
+            # Webhook already handled it — nothing left to do.
+            if done_key in _done:
+                logger.info(f"[Watcher] Commit {commit_sha[:8]} already done — exiting.")
+                return
+
+            pipeline = await gitlab.get_pipeline_for_commit(project_id, commit_sha)
+            if not pipeline:
+                logger.debug(f"[Watcher] No pipeline found yet for {commit_sha[:8]} — waiting.")
+                continue
+
+            status = pipeline.get("status")
+            pipeline_id = pipeline.get("id")
+            logger.info(f"[Watcher] Commit {commit_sha[:8]} — pipeline {pipeline_id} status: {status}")
+
+            if status == "success":
+                logger.info(f"[Watcher] Pipeline {pipeline_id} passed — triggering generation.")
+                await _generate_from_pipeline(
+                    project_id=project_id,
+                    project_web_url=pipeline.get("web_url", "").rsplit("/-/", 1)[0],
+                    branch=branch,
+                    commit_sha=commit_sha,
+                    mr_iid=mr_iid,
+                )
+                return
+
+            if status == "failed":
+                pipeline_url = pipeline.get("web_url", "")
+                await notify_pipeline_failure(
+                    project_id=project_id,
+                    branch=branch,
+                    pipeline_id=pipeline_id,
+                    pipeline_url=pipeline_url,
+                    mr_iid=mr_iid,
+                    commit_sha=commit_sha,
+                )
+                return
+
+            # Pipeline still running/pending — keep polling.
+
+        logger.warning(f"[Watcher] Timeout waiting for pipeline on commit {commit_sha[:8]}.")
+    except Exception:
+        logger.exception(f"[Watcher] Error watching commit {commit_sha[:8]}")
+    finally:
+        _watching.discard(done_key)
 
 
 async def _generate_from_pipeline(
