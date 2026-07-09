@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 _processing: set[tuple[int, str]] = set()
 _done: set[tuple[int, str]] = set()
 _watching: set[tuple[int, str]] = set()
+# Strong references to watcher tasks — prevents GC from cancelling them mid-run.
+_tasks: set[asyncio.Task] = set()
 
 WATCH_INTERVAL = 10   # seconds between polls
 WATCH_TIMEOUT  = 3600 # stop watching after 1 hour
@@ -128,10 +130,12 @@ async def _mark_pending(project_id: int, commit_sha: str, branch: str = "", mr_i
     watch_key = (project_id, commit_sha)
     if watch_key not in _watching:
         _watching.add(watch_key)
-        asyncio.create_task(
+        task = asyncio.create_task(
             _watch_pipeline(project_id, commit_sha, branch, mr_iid),
             name=f"watch-{commit_sha[:8]}",
         )
+        _tasks.add(task)
+        task.add_done_callback(_tasks.discard)
         logger.info(f"[Watcher] Started for commit {commit_sha[:8]} on branch '{branch}'.")
 
 
@@ -145,11 +149,12 @@ async def _watch_pipeline(
     Exits immediately if the webhook event already handled it (_done set).
     """
     gitlab = GitLabClient()
-    deadline = asyncio.get_event_loop().time() + WATCH_TIMEOUT
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + WATCH_TIMEOUT
     done_key = (project_id, commit_sha)
 
     try:
-        while asyncio.get_event_loop().time() < deadline:
+        while loop.time() < deadline:
             await asyncio.sleep(WATCH_INTERVAL)
 
             # Webhook already handled it — nothing left to do.
@@ -159,7 +164,7 @@ async def _watch_pipeline(
 
             pipeline = await gitlab.get_pipeline_for_commit(project_id, commit_sha)
             if not pipeline:
-                logger.debug(f"[Watcher] No pipeline found yet for {commit_sha[:8]} — waiting.")
+                logger.info(f"[Watcher] No pipeline found yet for {commit_sha[:8]} — waiting.")
                 continue
 
             status = pipeline.get("status")
@@ -332,6 +337,8 @@ async def process_mr(
         relevant = _filter_relevant_files(changes)
         if not relevant:
             logger.info(f"[MR !{mr_iid}] No relevant files — skipping.")
+            await _set_status("success", "No source files changed — skipped.")
+            _done.add(key)
             return
 
         # ── 2. Open live comment ───────────────────────────────────────────
