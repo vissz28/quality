@@ -19,23 +19,34 @@ def _extract_skill(name: str) -> str:
 GHERKIN_SYSTEM = _extract_skill("GHERKIN_SYSTEM")
 PLAYWRIGHT_SYSTEM = _extract_skill("PLAYWRIGHT_SYSTEM")
 
-_FENCE_RE = re.compile(r"```[a-zA-Z0-9]*\n?(.*?)```", re.DOTALL)
+_FENCE_LINE = re.compile(r"^\s*```")
 
 
 def _strip_code_fences(text: str) -> str:
     """Return runnable code from a model response.
 
     Models often wrap output in ```lang ... ``` fences (sometimes with prose
-    around them) despite being told not to. If fenced blocks are present, return
-    their concatenated contents; otherwise return the text unchanged. Writing
-    fenced text straight into a .spec.ts file breaks compilation, so Playwright
-    collects 0 tests.
+    around them) despite being told not to. Writing fenced text straight into a
+    .spec.ts file breaks compilation, so Playwright collects 0 tests.
+
+    Scans line by line and keeps only lines inside fences. Crucially, if the
+    response is truncated mid-block (an opening fence with no closing one — e.g.
+    the model ran out of tokens while writing the test file), the remaining code
+    is still kept rather than silently dropped.
     """
     text = text.strip()
-    blocks = _FENCE_RE.findall(text)
-    if blocks:
-        return "\n\n".join(b.strip() for b in blocks).strip()
-    return text
+    if "```" not in text:
+        return text
+
+    kept: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        if _FENCE_LINE.match(line):
+            inside = not inside
+            continue
+        if inside:
+            kept.append(line)
+    return "\n".join(kept).strip()
 
 
 class TestGenerator:
@@ -82,7 +93,7 @@ class TestGenerator:
 
         message = await self.client.messages.create(
             model=MODEL,
-            max_tokens=4096,
+            max_tokens=8192,
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )

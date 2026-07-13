@@ -52,7 +52,13 @@ Rules:
 - Use test.beforeEach() for shared setup
 - Handle async properly with await everywhere
 - Output ONLY valid TypeScript + Playwright, no explanation text
-- Start output with the page object class, then the test file
+- The test file with the test() blocks is mandatory and is the most important
+  part — always emit it. Output the test() blocks first, then the page object
+  class(es) below them in the same file (classes are only instantiated inside
+  test callbacks, so defining them after the tests is fine).
+- Keep page objects minimal — only the methods the scenarios actually use. Do
+  not spend the output budget on elaborate page objects at the expense of the
+  test() blocks.
 <!-- END:PLAYWRIGHT_SYSTEM -->
 
 ## 4. GitLab Operations
