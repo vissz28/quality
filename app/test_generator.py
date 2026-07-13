@@ -19,6 +19,24 @@ def _extract_skill(name: str) -> str:
 GHERKIN_SYSTEM = _extract_skill("GHERKIN_SYSTEM")
 PLAYWRIGHT_SYSTEM = _extract_skill("PLAYWRIGHT_SYSTEM")
 
+_FENCE_RE = re.compile(r"```[a-zA-Z0-9]*\n?(.*?)```", re.DOTALL)
+
+
+def _strip_code_fences(text: str) -> str:
+    """Return runnable code from a model response.
+
+    Models often wrap output in ```lang ... ``` fences (sometimes with prose
+    around them) despite being told not to. If fenced blocks are present, return
+    their concatenated contents; otherwise return the text unchanged. Writing
+    fenced text straight into a .spec.ts file breaks compilation, so Playwright
+    collects 0 tests.
+    """
+    text = text.strip()
+    blocks = _FENCE_RE.findall(text)
+    if blocks:
+        return "\n\n".join(b.strip() for b in blocks).strip()
+    return text
+
 
 class TestGenerator:
     def __init__(self):
@@ -43,7 +61,7 @@ class TestGenerator:
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )
-        return message.content[0].text.strip()
+        return _strip_code_fences(message.content[0].text)
 
     async def generate_playwright(
         self,
@@ -68,7 +86,7 @@ class TestGenerator:
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )
-        return message.content[0].text.strip()
+        return _strip_code_fences(message.content[0].text)
 
 
 def _build_system(

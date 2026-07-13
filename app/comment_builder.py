@@ -116,8 +116,8 @@ class CommentBuilder:
             rows.append(f"| {r.title} | {status} | {duration} | {detail} |")
 
         table = (
-            "| Test | Status | Time | Details |\n"
-            "|------|--------|------|---------|\n"
+            "| Scenario | Status | Time | Details |\n"
+            "|----------|--------|------|---------|\n"
             + "\n".join(rows)
         ) if rows else "_No individual test data available._"
 

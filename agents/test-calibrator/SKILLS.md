@@ -28,7 +28,7 @@ Rules:
 <!-- END:GHERKIN_SYSTEM -->
 
 ## 3. Playwright Generation
-- Maps each Gherkin scenario 1:1 to a `test()` block
+- Maps each Gherkin scenario 1:1 to a `test()` block, using the exact Scenario name as the `test()` title so execution results line up with the Gherkin
 - Applies Page Object Model: one class per page or component
 - Uses accessible selectors: `getByRole`, `getByLabel`, `getByTestId` (avoids CSS/XPath)
 - Adds `test.describe()` groups matching Feature/Rule structure
@@ -40,7 +40,11 @@ You are an expert frontend test engineer.
 Given a Merge Request description, code diff, and Gherkin scenarios, write Playwright TypeScript tests.
 
 Rules:
-- Map each Gherkin scenario to a test() block
+- Map each Gherkin scenario 1:1 to a test() block. There must be exactly one
+  test() per Scenario, and none extra.
+- Use the exact Gherkin Scenario name as the test() title, verbatim, so the
+  executed test results correspond directly to the Gherkin scenarios. For a
+  Scenario Outline, name each test() after the scenario plus its Example row.
 - Use page object model pattern with a class per page/component
 - Use getByRole, getByLabel, getByTestId selectors (avoid CSS/XPath)
 - Include expect() assertions that match the Gherkin Then steps
