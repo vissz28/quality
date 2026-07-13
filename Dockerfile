@@ -3,23 +3,23 @@
 # obsolete font packages (ttf-unifont / ttf-ubuntu-font-family).
 FROM python:3.12-slim-bookworm
 
-# Install Node.js (LTS) for Playwright test execution
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates gnupg \
+# Node.js + a prebuilt Playwright workspace, in ONE layer so the apt index is
+# still present when `playwright install --with-deps` runs its own apt-get
+# install (a prior `rm -rf .../apt/lists` left it with no install candidates).
+# Prebuilding the workspace means test execution never runs `npm install` at
+# request time (slow/flaky on small hosts — it left the execution section
+# unrendered). The app reuses this dir via PLAYWRIGHT_WORKDIR.
+ENV PLAYWRIGHT_WORKDIR=/opt/pw
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Prebuild a Playwright workspace so test execution never runs `npm install` at
-# request time (slow/flaky on small hosts — it left the execution section
-# unrendered). @playwright/test + the chromium browser are installed here once,
-# and the app reuses this dir via PLAYWRIGHT_WORKDIR.
-ENV PLAYWRIGHT_WORKDIR=/opt/pw
-RUN mkdir -p $PLAYWRIGHT_WORKDIR \
+    && mkdir -p $PLAYWRIGHT_WORKDIR \
     && cd $PLAYWRIGHT_WORKDIR \
     && npm init -y >/dev/null 2>&1 \
     && npm install --no-audit --no-fund @playwright/test@1.48.2 \
-    && npx playwright install --with-deps chromium
+    && npx playwright install --with-deps chromium \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /service
 
