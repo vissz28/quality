@@ -41,11 +41,6 @@ _mr_locks: dict[tuple[int, int], asyncio.Lock] = {}
 
 WATCH_INTERVAL = 10   # seconds between polls
 
-# GitLab pipeline statuses that mean the internal pipeline hasn't finished yet.
-_PIPELINE_IN_PROGRESS = {
-    "created", "waiting_for_resource", "preparing", "pending", "running", "scheduled",
-}
-
 
 def _get_mr_lock(project_id: int, mr_iid: int) -> asyncio.Lock:
     key = (project_id, mr_iid)
@@ -281,25 +276,12 @@ async def _generate_from_pipeline(
                 await gitlab.set_commit_status(project_id, commit_sha, "success", "No MR — skipped.")
             return
 
-        # Gate: only run our external "quality-code" pipeline once the project's
-        # internal pipeline has actually finished. If it's still in progress
-        # (e.g. a stale/duplicate trigger), defer and let the watcher retry when
-        # it completes.
-        try:
-            pipeline = await gitlab.get_mr_pipeline(project_id, mr_iid)
-            if pipeline and pipeline.get("status") in _PIPELINE_IN_PROGRESS:
-                logger.info(
-                    f"[MR !{mr_iid}] Internal pipeline still "
-                    f"'{pipeline.get('status')}' — deferring generation."
-                )
-                if commit_sha:
-                    _pending_watches.setdefault(
-                        (project_id, commit_sha), {"branch": branch, "mr_iid": mr_iid}
-                    )
-                return
-        except Exception:
-            logger.warning(f"[MR !{mr_iid}] Could not confirm internal pipeline state — proceeding.")
-
+        # We only reach here on a pipeline *success* (watcher / pipeline-success
+        # webhook / immediate check all gate on success), so the internal
+        # pipeline has already finished — start generation directly. Re-checking
+        # the pipeline here is unsafe: our own pending "quality-code" status can
+        # make the MR-pipelines query read in-progress and defer forever.
+        logger.info(f"[MR !{mr_iid}] Internal pipeline finished — starting generation.")
         mr = await gitlab.get_mr_details(project_id, mr_iid)
         await process_mr(
             project_id=project_id,
