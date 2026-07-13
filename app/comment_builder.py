@@ -93,11 +93,16 @@ class CommentBuilder:
 
     @staticmethod
     def execution_results(summary: ExecutionSummary) -> str:
-        if summary.execution_error:
-            body = f"> ⚠️ Execution error: {summary.execution_error}"
-            return _details("🧪 <strong>Test Execution Results</strong>", body)
+        heading = "\n\n---\n\n### 🧪 Test Execution Results"
 
-        icons = {"passed": "✅", "failed": "❌", "skipped": "⚠️"}
+        if summary.execution_error:
+            return f"{heading}\n\n> ⚠️ Execution error: {summary.execution_error}\n"
+
+        labels = {
+            "passed": "✅ Passed",
+            "failed": "❌ Failed",
+            "skipped": "⚠️ Skipped",
+        }
         summary_line = (
             f"> ✅ {summary.passed} passed · ❌ {summary.failed} failed · "
             f"⚠️ {summary.skipped} skipped · {summary.duration_s}s"
@@ -105,18 +110,15 @@ class CommentBuilder:
 
         rows = []
         for r in summary.results:
-            icon = icons.get(r.status, "❓")
+            status = labels.get(r.status, "❓ Unknown")
             detail = f"`{r.classification}` — {r.error}" if r.status == "failed" and r.error else "—"
-            rows.append(f"| {icon} {r.title} | {detail} |")
+            duration = f"{r.duration_ms / 1000:.1f}s" if r.duration_ms else "—"
+            rows.append(f"| {r.title} | {status} | {duration} | {detail} |")
 
         table = (
-            "| Test | Details |\n"
-            "|------|---------|\n"
+            "| Test | Status | Time | Details |\n"
+            "|------|--------|------|---------|\n"
             + "\n".join(rows)
         ) if rows else "_No individual test data available._"
 
-        body = f"{summary_line}\n\n{table}"
-        return _details(
-            f"🧪 <strong>Test Execution Results</strong> · ✅ {summary.passed} / ❌ {summary.failed}",
-            body,
-        )
+        return f"{heading}\n\n{summary_line}\n\n{table}\n"

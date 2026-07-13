@@ -1,12 +1,20 @@
 import asyncio
 import json
+import os
 import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
+
 
 TIMEOUT = 300  # 5 minutes
+
+# When set, generated Playwright tests are executed by the Node.js runner
+# service (see runner/) instead of shelling out to npm/npx locally. This is the
+# path used in Docker/CI, where the Python image has no Node.js.
+RUNNER_URL = os.environ.get("RUNNER_URL", "").rstrip("/")
 
 _PLAYWRIGHT_CONFIG = """\
 import { defineConfig, devices } from '@playwright/test';
@@ -50,6 +58,36 @@ class ExecutionSummary:
 
 class TestExecutor:
     async def run(self, playwright_code: str) -> ExecutionSummary:
+        if RUNNER_URL:
+            return await self._run_remote(playwright_code)
+        return await self._run_local(playwright_code)
+
+    async def _run_remote(self, playwright_code: str) -> ExecutionSummary:
+        """Delegate execution to the Node.js runner service over HTTP."""
+        summary = ExecutionSummary()
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT + 30) as client:
+                resp = await client.post(
+                    f"{RUNNER_URL}/run", json={"code": playwright_code}
+                )
+        except httpx.HTTPError as e:
+            summary.execution_error = f"Could not reach test runner: {e}"
+            return summary
+
+        raw = resp.text
+        # The runner returns either the raw Playwright JSON report, or a JSON
+        # object {"execution_error": "..."} when it couldn't run the tests.
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and "execution_error" in data:
+                summary.execution_error = data["execution_error"]
+                return summary
+        except ValueError:
+            pass
+
+        return _parse_results(raw)
+
+    async def _run_local(self, playwright_code: str) -> ExecutionSummary:
         summary = ExecutionSummary()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -102,6 +140,15 @@ class TestExecutor:
         return summary
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _clean_error(msg: str) -> str:
+    """Strip ANSI color codes and table-breaking pipes from a Playwright error."""
+    msg = _ANSI_RE.sub("", msg)
+    return msg.replace("|", "¦").strip()
+
+
 def _classify(error: str) -> str:
     if re.search(r"timeout|Timeout|timed out", error):
         return "TIMEOUT"
@@ -140,7 +187,7 @@ def _parse_results(raw: str) -> ExecutionSummary:
                     results_list = test.get("results", [])
                     if results_list:
                         err = results_list[0].get("error", {})
-                        error_msg = err.get("message", "").split("\n")[0][:120]
+                        error_msg = _clean_error(err.get("message", "").split("\n")[0])[:120]
                     classification = _classify(error_msg)
                     status = "failed"
                 elif status == "expected":

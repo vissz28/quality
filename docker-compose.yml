@@ -4,4 +4,15 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      # Execute generated Playwright tests on the Node.js runner service.
+      RUNNER_URL: http://runner:3000
+    depends_on:
+      - runner
+    restart: unless-stopped
+
+  runner:
+    build: ./runner
+    expose:
+      - "3000"
     restart: unless-stopped

@@ -1,0 +1,13 @@
+{
+  "name": "test-runner",
+  "version": "1.0.0",
+  "description": "Node.js service that executes generated Playwright tests (the runnable output of Gherkin scenarios) and returns JSON results.",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@playwright/test": "1.48.2"
+  }
+}

@@ -4,3 +4,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .env
+node_modules/
+runner/generated-*.spec.ts
+runner/playwright.config.ts
+runner/playwright-report/
+runner/test-results/
