@@ -27,7 +27,21 @@ _done: set[tuple[int, str]] = set()
 # Commits registered for pipeline watching: (project_id, sha) -> {branch, mr_iid}
 _pending_watches: dict[tuple[int, str], dict] = {}
 
+# One lock per MR so generations are serialized: when a new commit's pipeline
+# succeeds while an earlier one is still generating, the new run waits for the
+# first to finish instead of overlapping (racing on the live comment / status).
+_mr_locks: dict[tuple[int, int], asyncio.Lock] = {}
+
 WATCH_INTERVAL = 10   # seconds between polls
+
+
+def _get_mr_lock(project_id: int, mr_iid: int) -> asyncio.Lock:
+    key = (project_id, mr_iid)
+    lock = _mr_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _mr_locks[key] = lock
+    return lock
 
 
 @asynccontextmanager
@@ -314,6 +328,41 @@ async def notify_pipeline_failure(
 
 
 async def process_mr(
+    project_id: int,
+    project_web_url: str,
+    mr_iid: int,
+    mr_title: str,
+    mr_description: str,
+    source_branch: str,
+    target_branch: str,
+    author: str,
+    mr_url: str,
+    commit_sha: str = "",
+):
+    """Serialize generation per MR — a new run waits for the in-flight one.
+
+    Without this, two pipelines for the same MR (e.g. two quick pushes) generate
+    concurrently and race on the live comment and commit status.
+    """
+    lock = _get_mr_lock(project_id, mr_iid)
+    if lock.locked():
+        logger.info(f"[MR !{mr_iid}] Generation already running — waiting for it to finish first.")
+    async with lock:
+        await _process_mr(
+            project_id=project_id,
+            project_web_url=project_web_url,
+            mr_iid=mr_iid,
+            mr_title=mr_title,
+            mr_description=mr_description,
+            source_branch=source_branch,
+            target_branch=target_branch,
+            author=author,
+            mr_url=mr_url,
+            commit_sha=commit_sha,
+        )
+
+
+async def _process_mr(
     project_id: int,
     project_web_url: str,
     mr_iid: int,

@@ -8,6 +8,16 @@ if TYPE_CHECKING:
 _HEADER = "## 🤖 AI Test Generator"
 
 
+def _cell(text: str) -> str:
+    """Make text safe for a single Markdown table cell.
+
+    A raw '|' is read as a column separator, and a newline ends the row — both
+    shift every following value into the wrong column. Escape pipes and flatten
+    newlines so multi-part titles (e.g. Scenario Outline example rows) stay put.
+    """
+    return text.replace("\\", "").replace("|", "\\|").replace("\n", " ").strip()
+
+
 def _details(summary_line: str, body: str) -> str:
     """Render a GitLab-safe collapsible block. Never place --- directly before <details>."""
     return (
@@ -113,7 +123,8 @@ class CommentBuilder:
             status = labels.get(r.status, "❓ Unknown")
             detail = f"`{r.classification}` — {r.error}" if r.status == "failed" and r.error else "—"
             duration = f"{r.duration_ms / 1000:.1f}s" if r.duration_ms else "—"
-            rows.append(f"| {r.title} | {status} | {duration} | {detail} |")
+            title = _cell(r.title)
+            rows.append(f"| {title} | {status} | {duration} | {detail} |")
 
         table = (
             "| Scenario | Status | Time | Details |\n"
