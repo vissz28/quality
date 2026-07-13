@@ -7,8 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright system dependencies and browsers
-RUN npx --yes playwright install --with-deps chromium
+# Prebuild a Playwright workspace so test execution never runs `npm install` at
+# request time (slow/flaky on small hosts — it left the execution section
+# unrendered). @playwright/test + the chromium browser are installed here once,
+# and the app reuses this dir via PLAYWRIGHT_WORKDIR.
+ENV PLAYWRIGHT_WORKDIR=/opt/pw
+RUN mkdir -p $PLAYWRIGHT_WORKDIR \
+    && cd $PLAYWRIGHT_WORKDIR \
+    && npm init -y >/dev/null 2>&1 \
+    && npm install --no-audit --no-fund @playwright/test@1.48.2 \
+    && npx playwright install --with-deps chromium
 
 WORKDIR /service
 

@@ -8,10 +8,17 @@ from fastapi.responses import JSONResponse
 
 from .code_analyzer import CodeAnalyzer
 from .code_guardian import CodeGuardian
-from .comment_builder import CommentBuilder
+from .comment_builder import (
+    CommentBuilder,
+    STEP_ANALYSE,
+    STEP_GHERKIN,
+    STEP_PLAYWRIGHT,
+    STEP_EXECUTE,
+    STEP_DONE,
+)
 from .gitlab_client import GitLabClient
 from .middleware import GitlabTokenMiddleware
-from .test_executor import TestExecutor
+from .test_executor import ExecutionSummary, TestExecutor
 from .test_generator import TestGenerator
 
 _VERSION = (Path(__file__).parent.parent / "VERSION").read_text().strip()
@@ -33,6 +40,11 @@ _pending_watches: dict[tuple[int, str], dict] = {}
 _mr_locks: dict[tuple[int, int], asyncio.Lock] = {}
 
 WATCH_INTERVAL = 10   # seconds between polls
+
+# GitLab pipeline statuses that mean the internal pipeline hasn't finished yet.
+_PIPELINE_IN_PROGRESS = {
+    "created", "waiting_for_resource", "preparing", "pending", "running", "scheduled",
+}
 
 
 def _get_mr_lock(project_id: int, mr_iid: int) -> asyncio.Lock:
@@ -269,6 +281,25 @@ async def _generate_from_pipeline(
                 await gitlab.set_commit_status(project_id, commit_sha, "success", "No MR — skipped.")
             return
 
+        # Gate: only run our external "quality-code" pipeline once the project's
+        # internal pipeline has actually finished. If it's still in progress
+        # (e.g. a stale/duplicate trigger), defer and let the watcher retry when
+        # it completes.
+        try:
+            pipeline = await gitlab.get_mr_pipeline(project_id, mr_iid)
+            if pipeline and pipeline.get("status") in _PIPELINE_IN_PROGRESS:
+                logger.info(
+                    f"[MR !{mr_iid}] Internal pipeline still "
+                    f"'{pipeline.get('status')}' — deferring generation."
+                )
+                if commit_sha:
+                    _pending_watches.setdefault(
+                        (project_id, commit_sha), {"branch": branch, "mr_iid": mr_iid}
+                    )
+                return
+        except Exception:
+            logger.warning(f"[MR !{mr_iid}] Could not confirm internal pipeline state — proceeding.")
+
         mr = await gitlab.get_mr_details(project_id, mr_iid)
         await process_mr(
             project_id=project_id,
@@ -424,9 +455,16 @@ async def _process_mr(
             _done.add(key)
             return
 
-        # ── 2. Open live comment ───────────────────────────────────────────
+        # ── 2. Open live comment (internal pipeline already passed) ────────
+        # `sections` accumulates the detail blocks; each step re-renders the
+        # checklist + everything gathered so far, so every process is visible.
+        sections: list[str] = [
+            CommentBuilder.changed_files([f["new_path"] for f in relevant])
+        ]
         try:
-            note_id = await gitlab.post_mr_comment(project_id, mr_iid, CommentBuilder.starting())
+            note_id = await gitlab.post_mr_comment(
+                project_id, mr_iid, CommentBuilder.progress(STEP_ANALYSE, sections)
+            )
         except Exception:
             logger.warning(f"[MR !{mr_iid}] Could not post initial comment")
 
@@ -448,13 +486,14 @@ async def _process_mr(
             guardian.review(mr_title, diff_text, file_contents),
         )
         if code_analysis:
-            await _update(CommentBuilder.analysed(code_analysis))
+            sections.append(CommentBuilder.code_analysis(code_analysis))
         else:
             logger.warning(f"[MR !{mr_iid}] Code analysis failed — proceeding without it.")
         if guardian_report:
-            logger.info(f"[MR !{mr_iid}] Code Guardian findings ready.")
+            sections.append(guardian_report)
         else:
             logger.warning(f"[MR !{mr_iid}] Code Guardian returned no findings.")
+        await _update(CommentBuilder.progress(STEP_GHERKIN, sections))
 
         # ── 6. Generate Gherkin ────────────────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Generating Gherkin...")
@@ -462,7 +501,8 @@ async def _process_mr(
             mr_title, mr_description, diff_text, file_contents,
             example_tests=example_tests, code_analysis=code_analysis,
         )
-        await _update(CommentBuilder.gherkin_ready(code_analysis, gherkin))
+        sections.append(CommentBuilder.gherkin(gherkin))
+        await _update(CommentBuilder.progress(STEP_PLAYWRIGHT, sections))
 
         # ── 7. Generate Playwright ─────────────────────────────────────────
         logger.info(f"[MR !{mr_iid}] Generating Playwright...")
@@ -470,30 +510,19 @@ async def _process_mr(
             mr_title, diff_text, gherkin, file_contents,
             example_tests=example_tests, code_analysis=code_analysis,
         )
+        sections.append(CommentBuilder.playwright(playwright))
+        await _update(CommentBuilder.progress(STEP_EXECUTE, sections))
 
-        # ── 8. Final comment update ────────────────────────────────────────
-        final = CommentBuilder.build(
-            mr_iid=mr_iid,
-            mr_title=mr_title,
-            changed_files=[f["new_path"] for f in relevant],
-            gherkin=gherkin,
-            playwright=playwright,
-            code_analysis=code_analysis,
-            guardian_report=guardian_report,
-        )
-        if note_id:
-            await _update(final)
-        else:
-            try:
-                note_id = await gitlab.post_mr_comment(project_id, mr_iid, final)
-            except Exception:
-                pass
-
-        # ── 9. Execute tests and append results ───────────────────────────
+        # ── 8. Execute tests and append results ───────────────────────────
+        # Always render the execution section, even if the executor itself
+        # crashes — otherwise the comment silently ends at the Playwright tests.
         logger.info(f"[MR !{mr_iid}] Running generated tests (test-executor)...")
-        execution = await executor.run(playwright)
-        results_section = CommentBuilder.execution_results(execution)
-        await _update(final + results_section)
+        try:
+            execution = await executor.run(playwright)
+        except Exception as e:
+            logger.exception(f"[MR !{mr_iid}] Executor crashed: {e}")
+            execution = ExecutionSummary(execution_error=f"Executor crashed: {str(e)[:200]}")
+        sections.append(CommentBuilder.execution_results(execution))
         if execution.execution_error:
             logger.warning(f"[MR !{mr_iid}] Test execution error: {execution.execution_error}")
         else:
@@ -501,6 +530,20 @@ async def _process_mr(
                 f"[MR !{mr_iid}] Execution: {execution.passed} passed, "
                 f"{execution.failed} failed, {execution.skipped} skipped."
             )
+
+        # ── 9. Final comment update ────────────────────────────────────────
+        sections.append(CommentBuilder.review_footer())
+        meta = CommentBuilder.done_meta(
+            len(relevant), gherkin.count("Scenario"), playwright.count("test(")
+        )
+        final = CommentBuilder.progress(STEP_DONE, sections, done=True, meta=meta)
+        if note_id:
+            await _update(final)
+        else:
+            try:
+                note_id = await gitlab.post_mr_comment(project_id, mr_iid, final)
+            except Exception:
+                pass
 
         await _set_status("success", "Tests generated — review before merging.", mr_url)
         _done.add(key)

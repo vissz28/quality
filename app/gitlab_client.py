@@ -2,6 +2,10 @@ import base64
 import os
 import httpx
 
+# Name of the external commit status our bot posts. Shows up in the MR as its
+# own pipeline/check, separate from the project's internal CI pipeline.
+STATUS_NAME = os.environ.get("STATUS_NAME", "quality-code")
+
 
 class GitLabClient:
     def __init__(self):
@@ -102,7 +106,7 @@ class GitLabClient:
         self,
         project_id: int,
         sha: str,
-        name: str = "AI Test Generator",
+        name: str = STATUS_NAME,
     ) -> str | None:
         """Return the latest status string for the named check on a commit, or None."""
         url = f"{self.base}/projects/{project_id}/repository/commits/{sha}/statuses"
@@ -125,7 +129,7 @@ class GitLabClient:
         url = f"{self.base}/projects/{project_id}/statuses/{sha}"
         payload = {
             "state": state,
-            "name": "AI Test Generator",
+            "name": STATUS_NAME,
             "description": description,
         }
         if target_url:

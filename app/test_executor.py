@@ -3,6 +3,7 @@ import json
 import os
 import re
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,6 +16,11 @@ TIMEOUT = 300  # 5 minutes
 # service (see runner/) instead of shelling out to npm/npx locally. This is the
 # path used in Docker/CI, where the Python image has no Node.js.
 RUNNER_URL = os.environ.get("RUNNER_URL", "").rstrip("/")
+
+# A prebuilt Playwright workspace baked into the image (see Dockerfile). When
+# present we run specs there directly, skipping the slow/flaky per-run
+# `npm install` that otherwise causes execution to time out on small hosts.
+PLAYWRIGHT_WORKDIR = os.environ.get("PLAYWRIGHT_WORKDIR", "")
 
 _PLAYWRIGHT_CONFIG = """\
 import { defineConfig, devices } from '@playwright/test';
@@ -60,7 +66,42 @@ class TestExecutor:
     async def run(self, playwright_code: str) -> ExecutionSummary:
         if RUNNER_URL:
             return await self._run_remote(playwright_code)
+        if PLAYWRIGHT_WORKDIR and Path(PLAYWRIGHT_WORKDIR).is_dir():
+            return await self._run_in_workspace(playwright_code, PLAYWRIGHT_WORKDIR)
         return await self._run_local(playwright_code)
+
+    async def _run_in_workspace(self, playwright_code: str, workdir: str) -> ExecutionSummary:
+        """Run a spec in a prebuilt workspace — no per-run npm install.
+
+        @playwright/test and the browser are already installed in `workdir`
+        (baked into the image), so this only drops a spec file and runs it. This
+        avoids the install timeout that left the execution section unrendered.
+        """
+        summary = ExecutionSummary()
+        tmp = Path(workdir)
+        spec_name = f"generated-{uuid.uuid4().hex}.spec.ts"
+        spec_path = tmp / spec_name
+        spec_path.write_text(playwright_code, encoding="utf-8")
+        (tmp / "playwright.config.ts").write_text(_PLAYWRIGHT_CONFIG, encoding="utf-8")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "npx", "playwright", "test", spec_name, "--reporter=json",
+                cwd=workdir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT)
+        except FileNotFoundError:
+            summary.execution_error = "Node.js/Playwright not available in the workspace."
+            return summary
+        except asyncio.TimeoutError:
+            summary.execution_error = "Test execution timed out after 5 minutes."
+            return summary
+        finally:
+            spec_path.unlink(missing_ok=True)
+
+        return _parse_results(stdout.decode("utf-8", errors="replace"))
 
     async def _run_remote(self, playwright_code: str) -> ExecutionSummary:
         """Delegate execution to the Node.js runner service over HTTP."""
