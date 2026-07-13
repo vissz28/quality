@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+# Pin to bookworm (Debian 12): Playwright 1.48's `install --with-deps` doesn't
+# recognise Debian 13 (trixie, now the default `slim` tag) and fails resolving
+# obsolete font packages (ttf-unifont / ttf-ubuntu-font-family).
+FROM python:3.12-slim-bookworm
 
 # Install Node.js (LTS) for Playwright test execution
 RUN apt-get update && apt-get install -y --no-install-recommends \
