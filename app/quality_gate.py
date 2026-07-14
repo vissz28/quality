@@ -12,12 +12,31 @@ Thresholds live in one place so the policy is easy to see and tune.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .code_guardian import GuardianResult
     from .test_executor import ExecutionSummary
+
+_SKILLS_FILE = Path(__file__).parent.parent / "agents" / "quality-gate" / "SKILLS.md"
+
+
+def _extract_skill(name: str) -> str:
+    """Load a <!-- SKILL:name --> block from the agent's SKILLS.md."""
+    text = _SKILLS_FILE.read_text()
+    match = re.search(rf"<!-- SKILL:{name} -->\n(.*?)<!-- END:{name} -->", text, re.DOTALL)
+    if not match:
+        raise ValueError(f"Skill block '{name}' not found in quality-gate/SKILLS.md")
+    return match.group(1).strip()
+
+
+# Bound to the agent's skill definition (the policy of record), like the other
+# agents. Enforcement below is deterministic — the thresholds here must stay in
+# sync with the boundaries described in the skill.
+QUALITY_GATE_SYSTEM = _extract_skill("QUALITY_GATE_SYSTEM")
 
 RED_LINE_THRESHOLD = 0.10       # fraction of high-severity Guardian findings
 TEST_FAILURE_THRESHOLD = 0.10   # fraction of failed tests
