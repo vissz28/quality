@@ -1,9 +1,43 @@
 import json
 import re
+from dataclasses import dataclass, field
 import anthropic
 from pathlib import Path
 
 MODEL = "claude-sonnet-4-6"
+
+# Categories the guardian reports; used for both rendering and gating.
+_CATEGORIES = (
+    "security", "security_rules", "frontend", "database",
+    "infrastructure", "scripts", "dependencies", "integration", "style",
+)
+_SECURITY_CATEGORIES = ("security", "security_rules")
+
+
+@dataclass
+class GuardianResult:
+    """Rendered markdown plus the structured findings the quality gate needs."""
+    markdown: str = ""
+    findings: dict[str, list[dict]] = field(default_factory=dict)
+
+    @property
+    def total(self) -> int:
+        return sum(len(v) for v in self.findings.values())
+
+    @property
+    def high(self) -> int:
+        return sum(
+            1 for v in self.findings.values() for f in v if f.get("severity") == "high"
+        )
+
+    @property
+    def high_security(self) -> int:
+        return sum(
+            1
+            for cat in _SECURITY_CATEGORIES
+            for f in self.findings.get(cat, [])
+            if f.get("severity") == "high"
+        )
 
 _SKILLS_FILE = Path(__file__).parent.parent / "agents" / "code-guardian" / "SKILLS.md"
 
@@ -45,8 +79,12 @@ class CodeGuardian:
         mr_title: str,
         diff_text: str,
         file_contents: dict[str, str],
-    ) -> str | None:
-        """Return a formatted Markdown findings section, or None on failure."""
+    ) -> GuardianResult:
+        """Return the rendered findings section plus structured findings.
+
+        On failure returns an empty result (empty markdown, no findings) so the
+        pipeline continues — the guardian never blocks by itself.
+        """
         try:
             context = _build_context(mr_title, diff_text, file_contents)
             message = await self.client.messages.create(
@@ -57,9 +95,10 @@ class CodeGuardian:
             )
             raw = message.content[0].text.strip()
             data = _parse_json(raw)
-            return _format(data)
+            findings = {k: data.get(k, []) for k in _CATEGORIES if data.get(k)}
+            return GuardianResult(markdown=_format(data), findings=findings)
         except Exception:
-            return None
+            return GuardianResult()
 
 
 def _parse_json(raw: str) -> dict:

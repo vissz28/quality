@@ -9,7 +9,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import app.main as main
+from app.code_guardian import GuardianResult
 from app.test_executor import ExecutionSummary, TestResult
+
+
+def _clean_guardian() -> GuardianResult:
+    return GuardianResult(markdown="🛡️ **Code Guardian** — no blocking issues.", findings={})
 
 
 GHERKIN = """Feature: Number formatting
@@ -35,14 +40,13 @@ test('Billion-scale value is divided and formatted', async () => {
 
 
 def _execution_summary() -> ExecutionSummary:
-    s = ExecutionSummary(passed=1, failed=1, skipped=0, duration_s=1.4)
+    """All-passing execution — the happy path that clears the quality gate."""
+    s = ExecutionSummary(passed=2, failed=0, skipped=0, duration_s=1.4)
     s.results = [
         TestResult(title='Zero value returns "0"', status="passed", duration_ms=700),
         TestResult(
             title="Billion-scale value is divided and formatted",
-            status="failed",
-            error="expect(received).toBe(expected)",
-            classification="BUG",
+            status="passed",
             duration_ms=800,
         ),
     ]
@@ -98,7 +102,7 @@ async def test_process_mr_full_flow_populates_comment():
     analyzer.analyze.return_value = "Change formats numbers with unit suffixes."
 
     guardian = AsyncMock()
-    guardian.review.return_value = "🛡️ **Code Guardian** — no blocking issues."
+    guardian.review.return_value = _clean_guardian()
 
     executor = AsyncMock()
     executor.run.return_value = _execution_summary()
@@ -137,6 +141,7 @@ async def test_process_mr_full_flow_populates_comment():
     assert "Generating Gherkin scenarios" in all_text
     assert "Generating Playwright tests" in all_text
     assert "Executing tests" in all_text
+    assert "Quality gate" in all_text
 
     # The checklist advances: the opening comment is still in progress (has ⬜),
     # and the final comment has everything checked (no ⬜, no ⏳).
@@ -156,10 +161,10 @@ async def test_process_mr_full_flow_populates_comment():
     assert "| Scenario | Status | Time | Details |" in final
     assert 'Zero value returns "0"' in final
     assert "✅ Passed" in final
-    assert "❌ Failed" in final
-    assert "`BUG`" in final
 
-    # Commit status went running -> success.
+    # Quality gate passed (all tests green, clean guardian) -> status success.
+    assert "🚦 Quality Gate" in final
+    assert "PASSED" in final
     states = [state for state, _ in status_calls]
     assert states[0] == "running"
     assert states[-1] == "success"
@@ -180,7 +185,7 @@ async def test_process_mr_renders_section_even_when_execution_fails():
     analyzer = AsyncMock()
     analyzer.analyze.return_value = "analysis"
     guardian = AsyncMock()
-    guardian.review.return_value = ""
+    guardian.review.return_value = GuardianResult()
 
     executor = AsyncMock()
     failed = ExecutionSummary()
@@ -209,6 +214,56 @@ async def test_process_mr_renders_section_even_when_execution_fails():
     assert "Test Execution Results" in final
     assert "Execution error" in final
     assert "Node.js is not available" in final
+
+
+@pytest.mark.asyncio
+async def test_process_mr_quality_gate_fails_on_security_finding():
+    """A high-severity security finding fails the gate and the pipeline."""
+    comment_bodies: list[str] = []
+    status_calls: list[tuple[str, str]] = []
+    gitlab = _make_gitlab(comment_bodies, status_calls)
+
+    generator = AsyncMock()
+    generator.generate_gherkin.return_value = GHERKIN
+    generator.generate_playwright.return_value = PLAYWRIGHT
+    analyzer = AsyncMock()
+    analyzer.analyze.return_value = "analysis"
+
+    guardian = AsyncMock()
+    guardian.review.return_value = GuardianResult(
+        markdown="🛡️ findings",
+        findings={"security": [{"severity": "high", "issue": "hardcoded secret"}]},
+    )
+
+    executor = AsyncMock()
+    executor.run.return_value = _execution_summary()  # tests all pass
+
+    with patch.object(main, "GitLabClient", return_value=gitlab), \
+         patch.object(main, "TestGenerator", return_value=generator), \
+         patch.object(main, "CodeAnalyzer", return_value=analyzer), \
+         patch.object(main, "CodeGuardian", return_value=guardian), \
+         patch.object(main, "TestExecutor", return_value=executor):
+        await main.process_mr(
+            project_id=1,
+            project_web_url="https://gitlab.example.com/group/proj",
+            mr_iid=99,
+            mr_title="t",
+            mr_description="",
+            source_branch="b",
+            target_branch="main",
+            author="a",
+            mr_url="u",
+            commit_sha="cafe123",
+        )
+
+    final = comment_bodies[-1]
+    assert "🚦 Quality Gate" in final
+    assert "FAILED" in final
+    # Despite the failure, the full comment is still posted (fails loudly).
+    assert "Test Execution Results" in final
+    # Commit status ends failed.
+    states = [state for state, _ in status_calls]
+    assert states[-1] == "failed"
 
 
 @pytest.mark.asyncio

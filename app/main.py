@@ -14,8 +14,10 @@ from .comment_builder import (
     STEP_GHERKIN,
     STEP_PLAYWRIGHT,
     STEP_EXECUTE,
+    STEP_GATE,
     STEP_DONE,
 )
+from .quality_gate import QualityGate
 from .gitlab_client import GitLabClient
 from .middleware import GitlabTokenMiddleware
 from .test_executor import ExecutionSummary, TestExecutor
@@ -471,8 +473,8 @@ async def _process_mr(
             sections.append(CommentBuilder.code_analysis(code_analysis))
         else:
             logger.warning(f"[MR !{mr_iid}] Code analysis failed — proceeding without it.")
-        if guardian_report:
-            sections.append(guardian_report)
+        if guardian_report.markdown:
+            sections.append(guardian_report.markdown)
         else:
             logger.warning(f"[MR !{mr_iid}] Code Guardian returned no findings.")
         await _update(CommentBuilder.progress(STEP_GHERKIN, sections))
@@ -513,12 +515,23 @@ async def _process_mr(
                 f"{execution.failed} failed, {execution.skipped} skipped."
             )
 
-        # ── 9. Final comment update ────────────────────────────────────────
+        # ── 9. Quality gate — the final security/policy boundary ──────────
+        gate = QualityGate().evaluate(guardian_report, execution)
+        sections.append(CommentBuilder.quality_gate(gate))
+        if gate.passed:
+            logger.info(f"[MR !{mr_iid}] Quality gate PASSED.")
+        else:
+            logger.warning(f"[MR !{mr_iid}] Quality gate FAILED: {gate.summary}")
+
+        # ── 10. Final comment update + commit status ──────────────────────
         sections.append(CommentBuilder.review_footer())
         meta = CommentBuilder.done_meta(
             len(relevant), gherkin.count("Scenario"), playwright.count("test(")
         )
-        final = CommentBuilder.progress(STEP_DONE, sections, done=True, meta=meta)
+        if gate.passed:
+            final = CommentBuilder.progress(STEP_DONE, sections, done=True, meta=meta)
+        else:
+            final = CommentBuilder.progress(STEP_GATE, sections, failed=True, meta=meta)
         if note_id:
             await _update(final)
         else:
@@ -527,9 +540,13 @@ async def _process_mr(
             except Exception:
                 pass
 
-        await _set_status("success", "Tests generated — review before merging.", mr_url)
+        if gate.passed:
+            await _set_status("success", "Quality gate passed — review before merging.", mr_url)
+            logger.info(f"[MR !{mr_iid}] ✅ Done.")
+        else:
+            await _set_status("failed", f"Quality gate failed: {gate.summary[:120]}", mr_url)
+            logger.info(f"[MR !{mr_iid}] ❌ Done (quality gate failed).")
         _done.add(key)
-        logger.info(f"[MR !{mr_iid}] ✅ Done.")
 
     except Exception as e:
         logger.exception(f"[MR !{mr_iid}] ❌ Failed: {e}")

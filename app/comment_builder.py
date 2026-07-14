@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .test_executor import ExecutionSummary
+    from .quality_gate import GateResult
 
 _HEADER = "## 🤖 Quality Code"
 
@@ -17,6 +18,7 @@ STEPS = [
     "Generating Gherkin scenarios",
     "Generating Playwright tests",
     "Executing tests",
+    "Quality gate",
 ]
 # Named indices for readability from main.py.
 STEP_FETCH = 1
@@ -24,6 +26,7 @@ STEP_ANALYSE = 2
 STEP_GHERKIN = 3
 STEP_PLAYWRIGHT = 4
 STEP_EXECUTE = 5
+STEP_GATE = 6
 STEP_DONE = len(STEPS)
 
 
@@ -122,6 +125,21 @@ class CommentBuilder:
     @staticmethod
     def review_footer() -> str:
         return "> ⚠️ *Always review AI-generated tests before merging.*"
+
+    @staticmethod
+    def quality_gate(result: GateResult) -> str:
+        heading = "---\n\n### 🚦 Quality Gate"
+        verdict = "✅ **PASSED**" if result.passed else "❌ **FAILED**"
+        rows = [
+            f"| {'✅' if c.passed else '❌'} | {c.name} | {c.detail} |"
+            for c in result.checks
+        ]
+        table = (
+            "| | Check | Detail |\n"
+            "|---|-------|--------|\n"
+            + "\n".join(rows)
+        )
+        return f"{heading}\n\n> {verdict}\n\n{table}\n"
 
     # ── Execution results ───────────────────────────────────────────────────
 
