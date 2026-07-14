@@ -476,7 +476,7 @@ class ReportBuilder:
       {analysis_tab_html}
 
       <footer class="footer">
-        AI Test Generator · MR !{mr_iid} · {now}
+        Quality Code · MR !{mr_iid} · {now}
       </footer>
     </main>
 

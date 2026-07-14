@@ -534,7 +534,7 @@ async def _process_mr(
     except Exception as e:
         logger.exception(f"[MR !{mr_iid}] ❌ Failed: {e}")
         await _set_status("failed", f"Test generation failed: {str(e)[:100]}")
-        error_body = f"❌ **AI Test Generator** failed.\n\n```\n{str(e)}\n```"
+        error_body = f"❌ **Quality Code** failed.\n\n```\n{str(e)}\n```"
         try:
             if note_id:
                 await gitlab.edit_mr_comment(project_id, mr_iid, note_id, error_body)

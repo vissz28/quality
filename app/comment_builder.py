@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .test_executor import ExecutionSummary
 
-_HEADER = "## 🤖 AI Test Generator"
+_HEADER = "## 🤖 Quality Code"
 
 # Ordered pipeline of work shown as a live checklist in the MR comment. Index 0
 # is always complete by the time we post — we only start after the project's
