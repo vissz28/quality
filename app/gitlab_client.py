@@ -225,3 +225,29 @@ class GitLabClient:
                 },
             )
             r.raise_for_status()
+
+    # ── Project & tags ─────────────────────────────────────────────────────────
+
+    async def get_project(self, project_id: int) -> dict:
+        """Return project metadata (name, description, topics, path)."""
+        url = f"{self.base}/projects/{project_id}"
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url, headers=self.headers)
+            r.raise_for_status()
+            return r.json()
+
+    async def create_tag(
+        self, project_id: int, tag_name: str, ref: str, message: str = ""
+    ) -> dict | None:
+        """Create a tag at `ref`. Returns the tag JSON, or None if it already
+        exists (409) — a duplicate rollback anchor is not an error."""
+        url = f"{self.base}/projects/{project_id}/repository/tags"
+        payload: dict = {"tag_name": tag_name, "ref": ref}
+        if message:
+            payload["message"] = message
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(url, headers=self.headers, json=payload)
+            if r.status_code == 409:
+                return None
+            r.raise_for_status()
+            return r.json()

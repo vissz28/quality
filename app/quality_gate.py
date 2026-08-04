@@ -7,6 +7,7 @@ when a boundary is crossed, fails the pipeline. Failing conditions:
   2. Any high-severity security finding (hard security boundary)
   3. > 10% of Guardian findings are high severity  ("red line")
   4. > 10% of executed tests failed
+  5. SonarQube quality gate failed      (only when the project reports a status)
 
 Thresholds live in one place so the policy is easy to see and tune.
 """
@@ -79,6 +80,7 @@ class QualityGate:
         guardian: "GuardianResult",
         execution: "ExecutionSummary",
         internal_pipeline_failed: bool = False,
+        sonar_status: str | None = None,
     ) -> GateResult:
         checks: list[GateCheck] = []
 
@@ -120,6 +122,19 @@ class QualityGate:
             if fail_ratio > self.test_failure_threshold
             else f"{execution.failed}/{executed} failed ({fail_ratio:.0%})",
         ))
+
+        # 5. SonarQube quality gate — hard-blocks only on a definitive ERROR.
+        # "OK" passes; anything else (not analysed / server unavailable) is
+        # advisory and never blocks, so infra flakiness can't fail every MR.
+        if sonar_status == "OK":
+            checks.append(GateCheck("SonarQube quality gate", True, "passed"))
+        elif sonar_status == "ERROR":
+            checks.append(GateCheck("SonarQube quality gate", False, "failed on SonarQube"))
+        else:
+            checks.append(GateCheck(
+                "SonarQube quality gate", True,
+                "not analysed" if sonar_status is None else f"status '{sonar_status}'",
+            ))
 
         passed = all(c.passed for c in checks)
         return GateResult(passed=passed, checks=checks)

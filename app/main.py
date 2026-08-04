@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request, BackgroundTasks
@@ -14,14 +16,20 @@ from .comment_builder import (
     STEP_GHERKIN,
     STEP_PLAYWRIGHT,
     STEP_EXECUTE,
+    STEP_SONAR,
     STEP_GATE,
     STEP_DONE,
 )
 from .quality_gate import QualityGate
 from .gitlab_client import GitLabClient
 from .middleware import GitlabTokenMiddleware
+from .sonarqube_client import SonarQubeClient
 from .test_executor import ExecutionSummary, TestExecutor
 from .test_generator import TestGenerator
+from .scope_matcher import ScopeMatcher
+from .doc_reviewer import DocReviewer
+from .risk_assessor import RiskAssessor
+from .jira_client import JiraClient, extract_issue_key
 
 _VERSION = (Path(__file__).parent.parent / "VERSION").read_text().strip()
 
@@ -41,7 +49,7 @@ _pending_watches: dict[tuple[int, str], dict] = {}
 # first to finish instead of overlapping (racing on the live comment / status).
 _mr_locks: dict[tuple[int, int], asyncio.Lock] = {}
 
-WATCH_INTERVAL = 10   # seconds between polls
+WATCH_INTERVAL = 2   # seconds between polls
 
 
 def _get_mr_lock(project_id: int, mr_iid: int) -> asyncio.Lock:
@@ -377,6 +385,59 @@ async def process_mr(
         )
 
 
+def _flag(name: str) -> bool:
+    """Read a boolean opt-in feature flag from the environment (default off)."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+async def _gather_project_ctx(gitlab: GitLabClient, project_id: int, ref: str) -> dict:
+    """Best-effort project identity for the Trace Warden: name/description + README.
+    Any failure is swallowed — the scope check degrades gracefully."""
+    ctx: dict[str, str] = {}
+    try:
+        proj = await gitlab.get_project(project_id)
+        ctx["name"] = proj.get("name", "") or ""
+        ctx["description"] = proj.get("description", "") or ""
+    except Exception:
+        pass
+    try:
+        readme = await gitlab.get_file_content(project_id, "README.md", ref)
+        if readme:
+            ctx["readme"] = readme
+    except Exception:
+        pass
+    return ctx
+
+
+async def _append_changelog(
+    gitlab: GitLabClient, project_id: int, branch: str, entry: str, mr_iid: int
+) -> str | None:
+    """Opt-in: append a suggested changelog line to CHANGELOG.md on the source
+    branch. Uses [skip ci] so the extra commit doesn't retrigger the pipeline.
+    Returns a status note, or None if nothing was written."""
+    try:
+        line = entry.strip()
+        if not line.startswith("-"):
+            line = f"- {line}"
+        existing = await gitlab.get_file_content(project_id, "CHANGELOG.md", branch)
+        if existing is None:
+            content = f"# Changelog\n\n## Unreleased\n\n{line}\n"
+        elif line in existing:
+            return None  # already present
+        elif "## Unreleased" in existing:
+            content = existing.replace("## Unreleased", f"## Unreleased\n\n{line}", 1)
+        else:
+            head, _, rest = existing.partition("\n")
+            content = f"{head}\n\n## Unreleased\n\n{line}\n{rest}"
+        await gitlab.commit_file(
+            project_id, branch, "CHANGELOG.md", content,
+            f"docs(changelog): add entry for MR !{mr_iid} [skip ci]",
+        )
+        return f"> 📝 **Change Herald** added a changelog entry on `{branch}`: `{line}`"
+    except Exception:
+        return None
+
+
 async def _process_mr(
     project_id: int,
     project_web_url: str,
@@ -400,6 +461,11 @@ async def _process_mr(
     analyzer = CodeAnalyzer()
     guardian = CodeGuardian()
     executor = TestExecutor()
+    sonarqube = SonarQubeClient()
+    scope_matcher = ScopeMatcher()
+    doc_reviewer = DocReviewer()
+    risk_assessor = RiskAssessor()
+    jira = JiraClient()
 
     async def _set_status(state: str, description: str, url: str = "") -> None:
         if commit_sha:
@@ -462,12 +528,24 @@ async def _process_mr(
         # ── 4. Fetch example tests ─────────────────────────────────────────
         example_tests = await gitlab.get_example_tests(project_id, target_branch)
 
-        # ── 5. Software Engineer + Code Guardian (parallel) ───────────────
-        logger.info(f"[MR !{mr_iid}] Running software-engineer + code-guardian in parallel...")
+        # ── 5. Review agents (parallel): engineer, guardian, scope, docs, risk ─
+        logger.info(f"[MR !{mr_iid}] Running review agents in parallel...")
         diff_text = _format_diff(relevant)
-        code_analysis, guardian_report = await asyncio.gather(
+        changed_paths = [f["new_path"] for f in relevant]
+
+        # Extra context for the Scope Matcher: project identity + linked Jira story.
+        project_ctx = await _gather_project_ctx(gitlab, project_id, target_branch)
+        issue_key = extract_issue_key(
+            mr_title, mr_description, source_branch, project_key=jira.project_key
+        )
+        story = await jira.get_issue(issue_key)
+
+        code_analysis, guardian_report, scope_report, doc_report, risk_report = await asyncio.gather(
             analyzer.analyze(mr_title, mr_description, diff_text, file_contents),
             guardian.review(mr_title, diff_text, file_contents),
+            scope_matcher.match(story, project_ctx, mr_title, mr_description, diff_text),
+            doc_reviewer.review(mr_title, mr_description, diff_text, changed_paths),
+            risk_assessor.assess(mr_title, mr_description, diff_text),
         )
         if code_analysis:
             sections.append(CommentBuilder.code_analysis(code_analysis))
@@ -477,6 +555,9 @@ async def _process_mr(
             sections.append(guardian_report.markdown)
         else:
             logger.warning(f"[MR !{mr_iid}] Code Guardian returned no findings.")
+        sections.append(CommentBuilder.scope_match(scope_report))
+        sections.append(CommentBuilder.documentation(doc_report))
+        sections.append(CommentBuilder.rollback_risk(risk_report))
         await _update(CommentBuilder.progress(STEP_GHERKIN, sections))
 
         # ── 6. Generate Gherkin ────────────────────────────────────────────
@@ -515,15 +596,59 @@ async def _process_mr(
                 f"{execution.failed} failed, {execution.skipped} skipped."
             )
 
-        # ── 9. Quality gate — the final security/policy boundary ──────────
-        gate = QualityGate().evaluate(guardian_report, execution)
+        # ── 9. SonarQube — read the project's quality gate from the server ─
+        await _update(CommentBuilder.progress(STEP_SONAR, sections))
+        logger.info(f"[MR !{mr_iid}] Fetching SonarQube analysis...")
+        sonar = await sonarqube.analyse(_project_path_from_url(project_web_url), source_branch)
+        sections.append(CommentBuilder.sonarqube(sonar))
+        if sonar.error:
+            logger.warning(f"[MR !{mr_iid}] SonarQube unavailable: {sonar.error}")
+        elif sonar.configured:
+            logger.info(f"[MR !{mr_iid}] SonarQube status: {sonar.status}")
+
+        # ── 10. Quality gate — the final security/policy boundary ─────────
+        await _update(CommentBuilder.progress(STEP_GATE, sections))
+        gate = QualityGate().evaluate(guardian_report, execution, sonar_status=sonar.status)
         sections.append(CommentBuilder.quality_gate(gate))
         if gate.passed:
             logger.info(f"[MR !{mr_iid}] Quality gate PASSED.")
         else:
             logger.warning(f"[MR !{mr_iid}] Quality gate FAILED: {gate.summary}")
 
-        # ── 10. Final comment update + commit status ──────────────────────
+        # ── Opt-in actions (off by default) ───────────────────────────────
+        # Risk Marshal: drop a rollback-anchor tag on the target branch (a
+        # known-good pre-merge commit) when the gate passes.
+        if gate.passed and _flag("ROLLBACK_AUTOTAG"):
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            tag_name = f"rollback/pre-mr{mr_iid}-{stamp}"
+            try:
+                created = await gitlab.create_tag(
+                    project_id, tag_name, target_branch,
+                    message=f"Rollback anchor before MR !{mr_iid}",
+                )
+                risk_report.rollback_tag = tag_name
+                sections.append(
+                    f"> 🏷️ **Risk Marshal** set rollback anchor `{tag_name}` on `{target_branch}`"
+                    + ("" if created else " (already existed)") + "."
+                )
+                logger.info(f"[MR !{mr_iid}] Rollback tag {tag_name} ensured on {target_branch}.")
+            except Exception as e:
+                logger.warning(f"[MR !{mr_iid}] Rollback tag failed: {e}")
+
+        # Change Herald: append the suggested changelog entry on the source branch.
+        if (
+            _flag("CHANGELOG_AUTOUPDATE")
+            and doc_report.available
+            and not doc_report.changelog_updated
+            and doc_report.suggested_changelog
+        ):
+            note = await _append_changelog(
+                gitlab, project_id, source_branch, doc_report.suggested_changelog, mr_iid
+            )
+            if note:
+                sections.append(note)
+
+        # ── 11. Final comment update + commit status ──────────────────────
         sections.append(CommentBuilder.review_footer())
         meta = CommentBuilder.done_meta(
             len(relevant), gherkin.count("Scenario"), playwright.count("test(")
@@ -564,6 +689,18 @@ async def _process_mr(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _project_path_from_url(web_url: str) -> str:
+    """Derive the GitLab project path (`group/repo`) from its web URL.
+
+    Used as the default SonarQube project key when SONARQUBE_PROJECT_KEY is unset,
+    so one deployment can serve many integrated projects.
+    """
+    if not web_url:
+        return ""
+    without_scheme = web_url.split("://", 1)[-1]
+    return without_scheme.split("/", 1)[1] if "/" in without_scheme else ""
+
 
 RELEVANT_EXTENSIONS = {
     ".ts", ".tsx", ".js", ".jsx", ".vue",

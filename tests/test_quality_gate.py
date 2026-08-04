@@ -71,3 +71,21 @@ def test_no_tests_executed_does_not_fail_on_test_ratio():
     # 0 executed -> 0% failure; gate not failed by the test-ratio check alone.
     result = QualityGate().evaluate(GuardianResult(), _exec())
     assert result.passed
+
+
+def test_sonarqube_error_fails_gate():
+    result = QualityGate().evaluate(GuardianResult(), _exec(passed=10), sonar_status="ERROR")
+    assert not result.passed
+    assert any("SonarQube" in r for r in result.reasons)
+
+
+def test_sonarqube_ok_passes():
+    result = QualityGate().evaluate(GuardianResult(), _exec(passed=10), sonar_status="OK")
+    assert result.passed
+
+
+def test_sonarqube_not_analysed_is_advisory():
+    # No status (server not configured / no analysis) must never block on its own.
+    result = QualityGate().evaluate(GuardianResult(), _exec(passed=10), sonar_status=None)
+    assert result.passed
+    assert result.reasons == []

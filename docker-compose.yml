@@ -7,8 +7,14 @@ services:
     environment:
       # Execute generated Playwright tests on the Node.js runner service.
       RUNNER_URL: http://runner:3000
+      # Defaults to the local SonarQube over the compose network; set SONARQUBE_URL
+      # in .env to point at a hosted/self-managed server on deploy (that value
+      # wins). SONARQUBE_TOKEN (and, for multi-project setups,
+      # SONARQUBE_PROJECT_KEY) still come from .env.
+      SONARQUBE_URL: ${SONARQUBE_URL:-http://sonarqube:9000}
     depends_on:
       - runner
+      - sonarqube
     restart: unless-stopped
 
   runner:
@@ -16,3 +22,44 @@ services:
     expose:
       - "3000"
     restart: unless-stopped
+
+  # Local SonarQube server. First boot takes ~1–2 min; until it's up the
+  # SonarQube step is advisory (never blocks). Create a token in the UI
+  # (My Account → Security) and put it in .env as SONARQUBE_TOKEN.
+  sonarqube:
+    image: sonarqube:community
+    depends_on:
+      - sonardb
+    ports:
+      - "9000:9000"
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://sonardb:5432/sonar
+      SONAR_JDBC_USERNAME: sonar
+      SONAR_JDBC_PASSWORD: sonar
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    # SonarQube's embedded Elasticsearch needs a higher mmap limit and file-
+    # descriptor ceiling. On Linux hosts also set: sysctl -w vm.max_map_count=262144
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    restart: unless-stopped
+
+  sonardb:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: sonar
+      POSTGRES_PASSWORD: sonar
+      POSTGRES_DB: sonar
+    volumes:
+      - sonardb_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+  sonardb_data:

@@ -11,6 +11,24 @@ import pytest
 import app.main as main
 from app.code_guardian import GuardianResult
 from app.test_executor import ExecutionSummary, TestResult
+from app.scope_matcher import ScopeResult
+from app.doc_reviewer import DocResult
+from app.risk_assessor import RiskResult
+
+
+def _advisory_agents():
+    """Mocks for the advisory agents (Trace Warden / Change Herald / Risk Marshal)
+    and Jira, so the flow tests never construct real Anthropic clients."""
+    scope = AsyncMock()
+    scope.match.return_value = ScopeResult(available=False)
+    docrev = AsyncMock()
+    docrev.review.return_value = DocResult(available=True)
+    risk = AsyncMock()
+    risk.assess.return_value = RiskResult(available=False)
+    jira = AsyncMock()
+    jira.get_issue.return_value = None
+    jira.project_key = None
+    return scope, docrev, risk, jira
 
 
 def _clean_guardian() -> GuardianResult:
@@ -107,11 +125,16 @@ async def test_process_mr_full_flow_populates_comment():
     executor = AsyncMock()
     executor.run.return_value = _execution_summary()
 
+    scope, docrev, risk, jira = _advisory_agents()
     with patch.object(main, "GitLabClient", return_value=gitlab), \
          patch.object(main, "TestGenerator", return_value=generator), \
          patch.object(main, "CodeAnalyzer", return_value=analyzer), \
          patch.object(main, "CodeGuardian", return_value=guardian), \
-         patch.object(main, "TestExecutor", return_value=executor):
+         patch.object(main, "TestExecutor", return_value=executor), \
+         patch.object(main, "ScopeMatcher", return_value=scope), \
+         patch.object(main, "DocReviewer", return_value=docrev), \
+         patch.object(main, "RiskAssessor", return_value=risk), \
+         patch.object(main, "JiraClient", return_value=jira):
         await main.process_mr(
             project_id=1,
             project_web_url="https://gitlab.example.com/group/proj",
@@ -156,6 +179,14 @@ async def test_process_mr_full_flow_populates_comment():
     assert "Playwright tests" in final
     assert "Test Execution Results" in final
 
+    # The three advisory agents render their own sections.
+    assert "Trace Warden" in final
+    assert "Change Herald" in final
+    assert "Risk Marshal" in final
+    # New checklist steps are present and complete in the final comment.
+    assert "Scope & traceability match" in final
+    assert "Rollback & risk" in final
+
     # The execution table is populated with per-scenario rows (not the empty msg).
     assert "No individual test data available" not in final
     assert "| Scenario | Status | Time | Details |" in final
@@ -192,11 +223,16 @@ async def test_process_mr_renders_section_even_when_execution_fails():
     failed.execution_error = "Node.js is not available in this environment."
     executor.run.return_value = failed
 
+    scope, docrev, risk, jira = _advisory_agents()
     with patch.object(main, "GitLabClient", return_value=gitlab), \
          patch.object(main, "TestGenerator", return_value=generator), \
          patch.object(main, "CodeAnalyzer", return_value=analyzer), \
          patch.object(main, "CodeGuardian", return_value=guardian), \
-         patch.object(main, "TestExecutor", return_value=executor):
+         patch.object(main, "TestExecutor", return_value=executor), \
+         patch.object(main, "ScopeMatcher", return_value=scope), \
+         patch.object(main, "DocReviewer", return_value=docrev), \
+         patch.object(main, "RiskAssessor", return_value=risk), \
+         patch.object(main, "JiraClient", return_value=jira):
         await main.process_mr(
             project_id=1,
             project_web_url="https://gitlab.example.com/group/proj",
@@ -238,11 +274,16 @@ async def test_process_mr_quality_gate_fails_on_security_finding():
     executor = AsyncMock()
     executor.run.return_value = _execution_summary()  # tests all pass
 
+    scope, docrev, risk, jira = _advisory_agents()
     with patch.object(main, "GitLabClient", return_value=gitlab), \
          patch.object(main, "TestGenerator", return_value=generator), \
          patch.object(main, "CodeAnalyzer", return_value=analyzer), \
          patch.object(main, "CodeGuardian", return_value=guardian), \
-         patch.object(main, "TestExecutor", return_value=executor):
+         patch.object(main, "TestExecutor", return_value=executor), \
+         patch.object(main, "ScopeMatcher", return_value=scope), \
+         patch.object(main, "DocReviewer", return_value=docrev), \
+         patch.object(main, "RiskAssessor", return_value=risk), \
+         patch.object(main, "JiraClient", return_value=jira):
         await main.process_mr(
             project_id=1,
             project_web_url="https://gitlab.example.com/group/proj",
@@ -275,6 +316,7 @@ async def test_generate_from_pipeline_runs_generation():
         "target_branch": "main", "author": {"name": "a"}, "web_url": "u",
     }
 
+    scope, docrev, risk, jira = _advisory_agents()
     with patch.object(main, "GitLabClient", return_value=gitlab), \
          patch.object(main, "process_mr", new=AsyncMock()) as proc:
         await main._generate_from_pipeline(

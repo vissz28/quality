@@ -9,3 +9,5 @@ runner/generated-*.spec.ts
 runner/playwright.config.ts
 runner/playwright-report/
 runner/test-results/
+.npmrc
+.claude/
