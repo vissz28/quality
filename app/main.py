@@ -21,7 +21,7 @@ from .comment_builder import (
     STEP_DONE,
 )
 from .quality_gate import QualityGate
-from .gitlab_client import GitLabClient
+from .gitlab_client import GitLabClient, STATUS_NAME
 from .middleware import GitlabTokenMiddleware
 from .sonarqube_client import SonarQubeClient
 from .test_executor import ExecutionSummary, TestExecutor
@@ -50,6 +50,32 @@ _pending_watches: dict[tuple[int, str], dict] = {}
 _mr_locks: dict[tuple[int, int], asyncio.Lock] = {}
 
 WATCH_INTERVAL = 2   # seconds between polls
+
+# CI job states that mean the internal pipeline is still in flight.
+_PIPELINE_PENDING = {"created", "pending", "running", "preparing", "waiting_for_resource", "scheduled"}
+
+
+def internal_pipeline_status(statuses: list[dict], exclude_name: str = STATUS_NAME) -> str:
+    """Judge the internal CI from its individual jobs, IGNORING our own external
+    `quality-code` status.
+
+    GitLab attaches our pending `quality-code` status to the commit's pipeline, so
+    the aggregate pipeline status reads 'running' as long as our check is pending —
+    which would defer generation forever. Looking at the real jobs (minus ours)
+    breaks that deadlock.
+
+    Returns 'success' (all real jobs finished ok), 'failed', 'running', or 'none'.
+    """
+    jobs = [s for s in statuses if s.get("name") != exclude_name]
+    if not jobs:
+        return "none"
+    if any(s.get("status") in _PIPELINE_PENDING for s in jobs):
+        return "running"
+    for s in jobs:
+        st = s.get("status")
+        if st == "canceled" or (st == "failed" and not s.get("allow_failure")):
+            return "failed"
+    return "success"
 
 
 def _get_mr_lock(project_id: int, mr_iid: int) -> asyncio.Lock:
@@ -173,17 +199,20 @@ async def _mark_pending(project_id: int, commit_sha: str, branch: str = "", mr_i
     if watch_key in _done:
         return
 
-    # Fast-path: pipeline may have already passed before this webhook arrived.
+    # Fast-path: the internal CI may have already finished before this webhook
+    # arrived. Judge by the real jobs (excluding our own quality-code status), not
+    # the aggregate pipeline status — our pending check would keep that 'running'.
     try:
-        pipeline = None
-        if mr_iid:
-            pipeline = await gitlab.get_mr_pipeline(project_id, mr_iid)
-        if not pipeline:
-            pipeline = await gitlab.get_pipeline_for_commit(project_id, commit_sha)
-        if pipeline:
-            status = pipeline.get("status")
-            logger.info(f"[MR !{mr_iid}] Immediate pipeline check: {pipeline.get('id')} status={status}")
-            if status == "success":
+        statuses = await gitlab.get_commit_statuses(project_id, commit_sha)
+        ci = internal_pipeline_status(statuses)
+        logger.info(f"[MR !{mr_iid}] Immediate internal-CI check: {ci} ({len(statuses)} statuses)")
+        if ci in ("success", "failed"):
+            pipeline = (
+                (mr_iid and await gitlab.get_mr_pipeline(project_id, mr_iid))
+                or await gitlab.get_pipeline_for_commit(project_id, commit_sha)
+                or {}
+            )
+            if ci == "success":
                 await _generate_from_pipeline(
                     project_id=project_id,
                     project_web_url=pipeline.get("web_url", "").rsplit("/-/", 1)[0],
@@ -191,8 +220,7 @@ async def _mark_pending(project_id: int, commit_sha: str, branch: str = "", mr_i
                     commit_sha=commit_sha,
                     mr_iid=mr_iid,
                 )
-                return
-            if status in ("failed", "canceled"):
+            else:
                 await notify_pipeline_failure(
                     project_id=project_id,
                     branch=branch,
@@ -201,9 +229,9 @@ async def _mark_pending(project_id: int, commit_sha: str, branch: str = "", mr_i
                     mr_iid=mr_iid,
                     commit_sha=commit_sha,
                 )
-                return
+            return
     except Exception:
-        logger.exception(f"[MR !{mr_iid}] Immediate pipeline check failed — falling back to watcher.")
+        logger.exception(f"[MR !{mr_iid}] Immediate CI check failed — falling back to watcher.")
 
     if watch_key not in _pending_watches:
         _pending_watches[watch_key] = {"branch": branch, "mr_iid": mr_iid}
@@ -227,42 +255,38 @@ async def _watcher_loop() -> None:
             branch = info.get("branch", "")
             mr_iid = info.get("mr_iid")
             try:
-                pipeline = None
-                if mr_iid:
-                    pipeline = await gitlab.get_mr_pipeline(project_id, mr_iid)
-                if not pipeline:
-                    pipeline = await gitlab.get_pipeline_for_commit(project_id, commit_sha)
-                if not pipeline:
-                    logger.info(f"[Watcher] No pipeline yet for {commit_sha[:8]} — waiting.")
+                statuses = await gitlab.get_commit_statuses(project_id, commit_sha)
+                ci = internal_pipeline_status(statuses)
+                if ci == "none":
+                    logger.info(f"[Watcher] No CI jobs yet for {commit_sha[:8]} — waiting.")
                     continue
+                logger.info(f"[Watcher] {commit_sha[:8]} — internal CI: {ci}")
 
-                status = pipeline.get("status")
-                pipeline_id = pipeline.get("id")
-                logger.info(
-                    f"[Watcher] {commit_sha[:8]} — pipeline {pipeline_id}"
-                    f" ({pipeline.get('source', '?')}) status: {status}"
-                )
-
-                if status == "success":
-                    _pending_watches.pop(done_key, None)
-                    await _generate_from_pipeline(
-                        project_id=project_id,
-                        project_web_url=pipeline.get("web_url", "").rsplit("/-/", 1)[0],
-                        branch=branch,
-                        commit_sha=commit_sha,
-                        mr_iid=mr_iid,
+                if ci in ("success", "failed"):
+                    pipeline = (
+                        (mr_iid and await gitlab.get_mr_pipeline(project_id, mr_iid))
+                        or await gitlab.get_pipeline_for_commit(project_id, commit_sha)
+                        or {}
                     )
-                elif status in ("failed", "canceled"):
                     _pending_watches.pop(done_key, None)
-                    await notify_pipeline_failure(
-                        project_id=project_id,
-                        branch=branch,
-                        pipeline_id=pipeline_id,
-                        pipeline_url=pipeline.get("web_url", ""),
-                        mr_iid=mr_iid,
-                        commit_sha=commit_sha,
-                    )
-                # else: pending/running — keep watching next cycle
+                    if ci == "success":
+                        await _generate_from_pipeline(
+                            project_id=project_id,
+                            project_web_url=pipeline.get("web_url", "").rsplit("/-/", 1)[0],
+                            branch=branch,
+                            commit_sha=commit_sha,
+                            mr_iid=mr_iid,
+                        )
+                    else:
+                        await notify_pipeline_failure(
+                            project_id=project_id,
+                            branch=branch,
+                            pipeline_id=pipeline.get("id"),
+                            pipeline_url=pipeline.get("web_url", ""),
+                            mr_iid=mr_iid,
+                            commit_sha=commit_sha,
+                        )
+                # else: still running — keep watching next cycle
 
             except Exception:
                 logger.exception(f"[Watcher] Error checking pipeline for {commit_sha[:8]}")

@@ -117,6 +117,17 @@ class GitLabClient:
             statuses = r.json()
             return statuses[0]["status"] if statuses else None
 
+    async def get_commit_statuses(self, project_id: int, sha: str) -> list[dict]:
+        """Return every status/CI job for a commit (each with name, status,
+        allow_failure). Used to judge the internal pipeline by its own jobs while
+        ignoring our external 'quality-code' status — see internal_pipeline_status."""
+        url = f"{self.base}/projects/{project_id}/repository/commits/{sha}/statuses"
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=self.headers, params={"per_page": 100})
+            if r.status_code != 200:
+                return []
+            return r.json()
+
     async def set_commit_status(
         self,
         project_id: int,
