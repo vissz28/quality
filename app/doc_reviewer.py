@@ -47,6 +47,12 @@ class DocResult:
     available: bool = False
     docs_updated: bool = False
     changelog_updated: bool = False
+    # Whether the repo HAS a README / CHANGELOG / docs folder at all. When absent,
+    # "not updated" is not flagged — you can't fail to update what doesn't exist;
+    # instead the section shows a single "no documentation" alert.
+    readme_exists: bool = True
+    changelog_exists: bool = True
+    docs_folder_exists: bool = True
     breaking_changes: bool = False
     backward_compatible: bool = True
     breaking_documented: bool = True
@@ -65,6 +71,9 @@ class DocReviewer:
         mr_description: str,
         diff_text: str,
         changed_paths: list[str],
+        readme_exists: bool = True,
+        changelog_exists: bool = True,
+        docs_folder_exists: bool = True,
     ) -> DocResult:
         docs_updated = docs_touched(changed_paths)
         changelog_updated = changelog_touched(changed_paths)
@@ -75,6 +84,9 @@ class DocReviewer:
             available=True,
             docs_updated=docs_updated,
             changelog_updated=changelog_updated,
+            readme_exists=readme_exists,
+            changelog_exists=changelog_exists,
+            docs_folder_exists=docs_folder_exists,
             doc_files=doc_files,
         )
         try:

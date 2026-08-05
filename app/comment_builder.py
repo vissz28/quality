@@ -10,35 +10,37 @@ if TYPE_CHECKING:
     from .doc_reviewer import DocResult
     from .risk_assessor import RiskResult
 
-_HEADER = "## 🤖 Quality Gate"
+_HEADER = "## Quality Gate"
 
 # Ordered pipeline of work shown as a live checklist in the MR comment. Step 0
 # (the project's internal CI) is what we wait on — the rest starts once it finishes,
 # so the comment first appears with step 0 pending (⏳).
 STEPS = [
     "Internal pipeline",
-    "Fetching MR changes",
+    "Scope & traceability",
     "Analysing code & security review",
     "Generating Gherkin scenarios",
     "Generating Playwright tests",
     "Executing tests",
     "SonarQube analysis",
     "Quality gate",
-    "Scope & traceability",
     "Documentation & breaking changes",
     "Rollback & risk",
 ]
-# Named indices for readability from main.py.
+# Named indices for readability from main.py. Scope & traceability is the SECOND
+# step — right after the internal pipeline passes — so the Jira story is checked
+# against the change up front, with the tasks/tests shown below it. (Fetching the
+# MR changes happens as part of this step, not a separate line.)
 STEP_FETCH = 1
+STEP_SCOPE = 1
 STEP_ANALYSE = 2
 STEP_GHERKIN = 3
 STEP_PLAYWRIGHT = 4
 STEP_EXECUTE = 5
 STEP_SONAR = 6
 STEP_GATE = 7
-STEP_SCOPE = 8
-STEP_DOC = 9
-STEP_RISK = 10
+STEP_DOC = 8
+STEP_RISK = 9
 STEP_DONE = len(STEPS)
 
 
@@ -280,28 +282,31 @@ class CommentBuilder:
     def documentation(result: "DocResult") -> str:
         if not result.available:
             return _details("📝 <strong>Docs Reviewer</strong> — not evaluated", "> ⚪ Not evaluated.")
-        breaking_doc = "—" if not result.breaking_changes else (
-            "documented" if result.breaking_documented else "NOT documented"
-        )
+
+        has_docs = result.readme_exists or result.docs_folder_exists
+        # No documentation surface at all — a single alert, not per-file nags.
+        if not has_docs and not result.changelog_exists:
+            body = "> ⚠️ This project has no **README**, **CHANGELOG**, or **docs/** folder — consider adding documentation."
+            return _details("📝 <strong>Docs Reviewer</strong> — no documentation", body)
+
+        def _row(label: str, updated: bool, exists: bool) -> str:
+            if updated:
+                return f"| ✅ | {label} | updated |"
+            if exists:
+                return f"| ⚠️ | {label} | none |"
+            return f"| ⚪ | {label} | n/a (not in project) |"
+
         rows = [
-            f"| {'✅' if result.docs_updated else '⚪'} | README / API docs updated | "
-            f"{'updated' if result.docs_updated else 'not touched'} |",
-            f"| {'✅' if result.changelog_updated else '⚪'} | Changelog updated | "
-            f"{'updated' if result.changelog_updated else 'not touched'} |",
-            f"| {'⚠️' if result.breaking_changes else '✅'} | Breaking changes | "
-            f"{'yes' if result.breaking_changes else 'none detected'} |",
-            f"| {'✅' if (not result.breaking_changes or result.breaking_documented) else '⚠️'} | "
-            f"Breaking changes documented | {breaking_doc} |",
-            f"| {'✅' if result.backward_compatible else '⚠️'} | Backward compatible | "
-            f"{'yes' if result.backward_compatible else 'no'} |",
+            _row("Changelog changed", result.changelog_updated, result.changelog_exists),
+            _row("README / docs correction", result.docs_updated, has_docs),
         ]
         table = "| | Check | Result |\n|---|-------|--------|\n" + "\n".join(rows)
         body = table
         if result.notes:
             body += f"\n\n> {result.notes}"
-        if result.suggested_changelog:
+        if result.suggested_changelog and result.changelog_exists:
             body += f"\n\n**Suggested changelog entry** (no changelog change detected):\n```\n{result.suggested_changelog}\n```"
-        return _details("📝 <strong>Docs Reviewer</strong> — Documentation & Breaking Changes", body)
+        return _details("📝 <strong>Docs Reviewer</strong> — Documentation", body)
 
     _RISK_ICON = {"low": "🟢", "medium": "🟡", "high": "🔴"}
 

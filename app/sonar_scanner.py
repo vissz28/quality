@@ -105,5 +105,10 @@ async def _run(cmd: list[str], cwd: str | None = None, env: dict | None = None) 
     )
     out, _ = await proc.communicate()
     if proc.returncode != 0 and out:
-        logger.info("scan cmd output tail: %s", out.decode("utf-8", "replace")[-500:])
+        text = out.decode("utf-8", "replace")
+        # Surface the actual ERROR lines (the real cause), not just the stack tail.
+        errors = [ln for ln in text.splitlines() if "ERROR" in ln][:10]
+        if errors:
+            logger.warning("scan ERROR lines:\n%s", "\n".join(errors))
+        logger.info("scan cmd output tail: %s", text[-800:])
     return proc.returncode if proc.returncode is not None else 1

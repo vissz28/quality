@@ -1,27 +1,31 @@
 # Skills: Docs Reviewer
 
-Verifies the paperwork around a change: are the docs and changelog kept in step,
-are breaking changes flagged, is backward compatibility preserved? Whether docs
-and the changelog were touched is decided deterministically from the diff; the
-breaking-change and compatibility judgement is the model's job. Advisory only.
+Checks that a change keeps its documentation in step. Two things are decided
+deterministically (no model): does the project even HAVE a README / CHANGELOG /
+docs folder, and were any of them touched by this MR. The model only drafts a
+changelog line and flags breaking changes for the notes. Advisory only.
 
-## 1. Deterministic file signals (no model)
-From the changed-file list: was a README/API doc touched? was a CHANGELOG touched?
-These become the "README / API docs updated" and "Changelog updated" checks.
+## 1. Documentation presence (no model — from the repo tree)
+Detect whether the project has a README, a CHANGELOG, and/or a docs/ folder.
+If it has NONE of them, the section shows a single alert ("no README, CHANGELOG,
+or docs/ folder") instead of nagging per file.
 
-## 2. Breaking-change detection (model)
-Read the diff for changes that can break callers: removed/renamed public
-functions, endpoints, CLI flags, env vars, config keys; changed function
-signatures or response shapes; non-additive DB schema changes; tightened
-validation. Decide `breaking_changes` and whether backward compatibility holds.
+## 2. Follow-through signals (no model — from the diff)
+For the surfaces that DO exist: was the CHANGELOG changed? was the README / docs
+folder corrected? These become the "Changelog changed" and "README / docs
+correction" checks — ⚠️ when the file exists but wasn't updated, ⚪ n/a when the
+project doesn't have it.
 
-## 3. Documentation follow-through (model)
-When breaking changes exist, check the MR description / changelog for whether they
-are documented and communicated. Flag undocumented breaking changes.
+## 3. Breaking-change signal (model → notes)
+Read the diff for changes that can break callers (removed/renamed public
+functions, endpoints, CLI flags, env vars, config keys; changed signatures or
+response shapes; non-additive DB schema changes; tightened validation) and fold
+the finding into the short notes line.
 
 ## 4. Changelog assist (model)
-When no changelog entry was added, draft a single concise entry the developer can
-paste (Keep a Changelog style: Added / Changed / Fixed / Removed). Suggestion only.
+When the project has a CHANGELOG but no entry was added, draft a single concise
+entry the developer can paste (Keep a Changelog style: Added / Changed / Fixed /
+Removed). Suggestion only.
 
 <!-- SKILL:DOC_REVIEW_SYSTEM -->
 You review the documentation & breaking-change posture of a GitLab Merge Request.

@@ -18,6 +18,7 @@ from .comment_builder import (
     STEP_SONAR,
     STEP_GATE,
     STEP_SCOPE,
+    STEP_DOC,
     STEP_DONE,
 )
 from .quality_gate import QualityGate
@@ -425,6 +426,26 @@ async def process_mr(
         )
 
 
+async def _detect_docs(gitlab: GitLabClient, project_id: int, ref: str) -> tuple[bool, bool, bool]:
+    """Detect whether the repo has a README, a CHANGELOG, and a docs/ folder.
+    One root-tree call; returns (readme_exists, changelog_exists, docs_folder_exists).
+    Best-effort — on any error assume they exist so we don't false-alarm."""
+    tree = await gitlab.get_tree(project_id, ref)
+    if not tree:
+        return True, True, True
+    readme = changelog = docs_folder = False
+    for entry in tree:
+        name = (entry.get("name") or "").lower()
+        etype = entry.get("type")
+        if name.startswith("readme"):
+            readme = True
+        elif name.startswith("changelog") or name.startswith("history"):
+            changelog = True
+        elif etype == "tree" and name in ("docs", "doc", "documentation"):
+            docs_folder = True
+    return readme, changelog, docs_folder
+
+
 async def _gather_project_ctx(gitlab: GitLabClient, project_id: int, ref: str) -> dict:
     """Best-effort project identity for the Scope Analyzer: name/description + README.
     Any failure is swallowed — the scope check degrades gracefully."""
@@ -518,7 +539,7 @@ async def _process_mr(
         sections: list[str] = [
             CommentBuilder.changed_files([f["new_path"] for f in relevant])
         ]
-        body = CommentBuilder.progress(STEP_ANALYSE, sections)
+        body = CommentBuilder.progress(STEP_SCOPE, sections)
         try:
             if note_id:
                 await gitlab.edit_mr_comment(project_id, mr_iid, note_id, body)
@@ -534,14 +555,27 @@ async def _process_mr(
             diff = file.get("diff", "")
             if diff:
                 file_contents[file["new_path"]] = _extract_changed_lines(diff)
+        diff_text = _format_diff(relevant)
+        changed_paths = [f["new_path"] for f in relevant]
+
+        # ── Scope & traceability (EARLY) — right after the internal pipeline,
+        # check the change against the linked Jira story so functional alignment
+        # (story ↔ tasks) is established before the tests below are generated.
+        logger.info(f"[MR !{mr_iid}] Scope & traceability (Jira story alignment)...")
+        project_ctx = await _gather_project_ctx(gitlab, project_id, target_branch)
+        issue_key = extract_issue_key(mr_title, mr_description, source_branch, project_key=jira.project_key)
+        story = await jira.get_issue(issue_key)
+        scope_report = await scope_matcher.match(
+            story, project_ctx, mr_title, mr_description, diff_text
+        )
+        sections.append(CommentBuilder.scope_match(scope_report))
+        await _update(CommentBuilder.progress(STEP_ANALYSE, sections))
 
         # ── 4. Fetch example tests ─────────────────────────────────────────
         example_tests = await gitlab.get_example_tests(project_id, target_branch)
 
         # ── 5. Software Engineer + Code Guardian (parallel) ───────────────
         logger.info(f"[MR !{mr_iid}] Running software-engineer + code-guardian in parallel...")
-        diff_text = _format_diff(relevant)
-        changed_paths = [f["new_path"] for f in relevant]
         code_analysis, guardian_report = await asyncio.gather(
             analyzer.analyze(mr_title, mr_description, diff_text, file_contents),
             guardian.review(mr_title, diff_text, file_contents),
@@ -598,6 +632,9 @@ async def _process_mr(
         # The bot scans the MR ITSELF (in-bot scanner) — no separate GitLab project.
         await _update(CommentBuilder.progress(STEP_SONAR, sections))
         sonar_key = sonarqube.project_key(_project_path_from_url(project_web_url))
+        logger.info(
+            f"[MR !{mr_iid}] Sonar key='{sonar_key}' in-bot scanner available={sonar_scanner.available()}"
+        )
         scan_enabled = False
         if sonar_scanner.available():
             # Self-provision the project so a brand-new repo never hits
@@ -635,18 +672,22 @@ async def _process_mr(
         else:
             logger.warning(f"[MR !{mr_iid}] Quality gate FAILED: {gate.summary}")
 
-        # ── 11. Advisory agents (shown at the end): scope, docs, risk ─────
-        await _update(CommentBuilder.progress(STEP_SCOPE, sections))
-        logger.info(f"[MR !{mr_iid}] Running scope / docs / risk agents...")
-        project_ctx = await _gather_project_ctx(gitlab, project_id, target_branch)
-        issue_key = extract_issue_key(mr_title, mr_description, source_branch, project_key=jira.project_key)
-        story = await jira.get_issue(issue_key)
-        scope_report, doc_report, risk_report = await asyncio.gather(
-            scope_matcher.match(story, project_ctx, mr_title, mr_description, diff_text),
-            doc_reviewer.review(mr_title, mr_description, diff_text, changed_paths),
+        # ── 11. Advisory agents (shown at the end): docs, risk ────────────
+        # (Scope & traceability already ran early, right after the internal pipeline.)
+        await _update(CommentBuilder.progress(STEP_DOC, sections))
+        logger.info(f"[MR !{mr_iid}] Running docs / risk agents...")
+        readme_exists, changelog_exists, docs_folder_exists = await _detect_docs(
+            gitlab, project_id, target_branch
+        )
+        doc_report, risk_report = await asyncio.gather(
+            doc_reviewer.review(
+                mr_title, mr_description, diff_text, changed_paths,
+                readme_exists=readme_exists,
+                changelog_exists=changelog_exists,
+                docs_folder_exists=docs_folder_exists,
+            ),
             risk_assessor.assess(mr_title, mr_description, diff_text),
         )
-        sections.append(CommentBuilder.scope_match(scope_report))
         sections.append(CommentBuilder.documentation(doc_report))
         sections.append(CommentBuilder.rollback_risk(risk_report))
 

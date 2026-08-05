@@ -16,10 +16,13 @@ unconfigured result and the gate treats it as "not analysed" (never blocks).
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # Metrics we pull for the MR comment. Kept small and human-meaningful.
 _METRIC_KEYS = "bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,sqale_rating,security_rating,reliability_rating"
@@ -100,10 +103,19 @@ class SonarQubeClient:
             async with httpx.AsyncClient(timeout=15, auth=self._auth) as client:
                 r = await client.post(f"{self.base}/api/projects/create", data=data)
                 if r.status_code in (200, 201):
+                    logger.info("SonarCloud project created: %s", project_key)
                     return True
                 # Already provisioned (manually or by a prior scan) → fine.
-                return r.status_code == 400 and "exist" in r.text.lower()
-        except Exception:
+                if r.status_code == 400 and "exist" in r.text.lower():
+                    logger.info("SonarCloud project already exists: %s", project_key)
+                    return True
+                logger.warning(
+                    "ensure_project(%s) failed HTTP %s: %s",
+                    project_key, r.status_code, r.text[:300],
+                )
+                return False
+        except Exception as e:
+            logger.warning("ensure_project(%s) error: %s", project_key, str(e)[:200])
             return False
 
     async def delete_project(self, project_key: str) -> bool:

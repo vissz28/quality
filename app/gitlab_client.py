@@ -272,6 +272,20 @@ class GitLabClient:
         except Exception:
             return None
 
+    async def get_tree(self, project_id: int, ref: str, path: str = "") -> list[dict]:
+        """List entries (name/type) at a repo path for a ref, or [] on error.
+        Used to detect whether the project has a README / CHANGELOG / docs folder."""
+        url = f"{self.base}/projects/{project_id}/repository/tree"
+        params = {"ref": ref, "path": path, "per_page": 100}
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(url, headers=self.headers, params=params)
+                if r.status_code != 200:
+                    return []
+                return r.json()
+        except Exception:
+            return []
+
     # ── Project ─────────────────────────────────────────────────────────────────
 
     async def get_project(self, project_id: int) -> dict:

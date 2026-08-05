@@ -160,7 +160,7 @@ async def test_process_mr_full_flow_populates_comment():
     # Every process step is shown as a checklist item across the updates.
     all_text = "\n".join(comment_bodies)
     assert "Internal pipeline" in all_text
-    assert "Fetching MR changes" in all_text
+    assert "Scope & traceability" in all_text
     assert "Analysing code & security review" in all_text
     assert "Generating Gherkin scenarios" in all_text
     assert "Generating Playwright tests" in all_text
