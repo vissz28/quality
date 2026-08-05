@@ -1,4 +1,4 @@
-# Skills: Change Herald
+# Skills: Docs Reviewer
 
 Verifies the paperwork around a change: are the docs and changelog kept in step,
 are breaking changes flagged, is backward compatibility preserved? Whether docs

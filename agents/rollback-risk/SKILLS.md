@@ -1,10 +1,9 @@
-# Skills: Risk Marshal
+# Skills: Risk Analyzer
 
 Judges how risky a change is to deploy and whether it can be safely undone. Rates
 overall risk, checks that any new feature flag defaults to a safe (off) state, and
-notes what a rollback would involve. Advisory only. When enabled, it can also drop
-a **rollback anchor tag** on the target branch so there is a known-good point to
-revert to.
+tells you whether you can roll back cleanly. Advisory and read-only — it reports,
+it never writes to the repo.
 
 ## 1. Risk rating (model)
 Weigh blast radius from the diff: DB/schema migrations, infra/IaC changes,
@@ -18,10 +17,6 @@ Detect a newly introduced feature flag/toggle. A new flag should default to **of
 ## 3. Rollback posture (model)
 Note what reverting would take: is it a clean revert, or does it need a data
 migration rollback / coordinated deploy? Summarise in one line.
-
-## 4. Rollback anchor (action, opt-in)
-Independent of the model: when `ROLLBACK_AUTOTAG=true` and the gate passes, tag the
-target branch's current commit as a rollback point before the change merges.
 
 <!-- SKILL:RISK_ASSESS_SYSTEM -->
 You assess the deployment risk and rollback posture of a GitLab Merge Request.

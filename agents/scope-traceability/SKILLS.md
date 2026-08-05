@@ -1,4 +1,4 @@
-# Skills: Trace Warden
+# Skills: Scope Analyzer
 
 The Scope Matcher answers one question for a reviewer: **does this MR actually do
 what its Jira story asked for — and does that story even belong to this project?**

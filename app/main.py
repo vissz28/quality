@@ -1,8 +1,6 @@
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request, BackgroundTasks
@@ -18,6 +16,7 @@ from .comment_builder import (
     STEP_EXECUTE,
     STEP_SONAR,
     STEP_GATE,
+    STEP_SCOPE,
     STEP_DONE,
 )
 from .quality_gate import QualityGate
@@ -43,6 +42,10 @@ _done: set[tuple[int, str]] = set()
 
 # Commits registered for pipeline watching: (project_id, sha) -> {branch, mr_iid}
 _pending_watches: dict[tuple[int, str], dict] = {}
+
+# The live comment note per MR: (project_id, mr_iid) -> note_id. Posted early (with
+# the pipeline pending) so it can be edited in place once generation runs.
+_mr_comments: dict[tuple[int, int], int] = {}
 
 # One lock per MR so generations are serialized: when a new commit's pipeline
 # succeeds while an earlier one is still generating, the new run waits for the
@@ -194,6 +197,17 @@ async def _mark_pending(project_id: int, commit_sha: str, branch: str = "", mr_i
         )
     except Exception:
         logger.warning(f"Failed to set pending status for commit {commit_sha[:8]}")
+
+    # Post the live comment now, with the internal pipeline pending (⏳) and our
+    # steps not started — they begin once the internal CI finishes. The comment is
+    # edited in place from here on.
+    if mr_iid and (project_id, mr_iid) not in _mr_comments:
+        try:
+            body = CommentBuilder.progress(0, meta="> ⏳ Waiting for the internal pipeline to finish…")
+            note_id = await gitlab.post_mr_comment(project_id, mr_iid, body)
+            _mr_comments[(project_id, mr_iid)] = note_id
+        except Exception:
+            logger.warning(f"[MR !{mr_iid}] Could not post pending comment")
 
     watch_key = (project_id, commit_sha)
     if watch_key in _done:
@@ -409,13 +423,8 @@ async def process_mr(
         )
 
 
-def _flag(name: str) -> bool:
-    """Read a boolean opt-in feature flag from the environment (default off)."""
-    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
-
-
 async def _gather_project_ctx(gitlab: GitLabClient, project_id: int, ref: str) -> dict:
-    """Best-effort project identity for the Trace Warden: name/description + README.
+    """Best-effort project identity for the Scope Analyzer: name/description + README.
     Any failure is swallowed — the scope check degrades gracefully."""
     ctx: dict[str, str] = {}
     try:
@@ -431,35 +440,6 @@ async def _gather_project_ctx(gitlab: GitLabClient, project_id: int, ref: str) -
     except Exception:
         pass
     return ctx
-
-
-async def _append_changelog(
-    gitlab: GitLabClient, project_id: int, branch: str, entry: str, mr_iid: int
-) -> str | None:
-    """Opt-in: append a suggested changelog line to CHANGELOG.md on the source
-    branch. Uses [skip ci] so the extra commit doesn't retrigger the pipeline.
-    Returns a status note, or None if nothing was written."""
-    try:
-        line = entry.strip()
-        if not line.startswith("-"):
-            line = f"- {line}"
-        existing = await gitlab.get_file_content(project_id, "CHANGELOG.md", branch)
-        if existing is None:
-            content = f"# Changelog\n\n## Unreleased\n\n{line}\n"
-        elif line in existing:
-            return None  # already present
-        elif "## Unreleased" in existing:
-            content = existing.replace("## Unreleased", f"## Unreleased\n\n{line}", 1)
-        else:
-            head, _, rest = existing.partition("\n")
-            content = f"{head}\n\n## Unreleased\n\n{line}\n{rest}"
-        await gitlab.commit_file(
-            project_id, branch, "CHANGELOG.md", content,
-            f"docs(changelog): add entry for MR !{mr_iid} [skip ci]",
-        )
-        return f"> 📝 **Change Herald** added a changelog entry on `{branch}`: `{line}`"
-    except Exception:
-        return None
 
 
 async def _process_mr(
@@ -499,7 +479,8 @@ async def _process_mr(
                 logger.warning(f"[MR !{mr_iid}] Failed to set commit status '{state}'")
 
     # note_id tracks the live comment so we can edit it in place at each step.
-    note_id: int | None = None
+    # Reuse the pending comment posted at _mark_pending time, if any.
+    note_id: int | None = _mr_comments.get((project_id, mr_iid))
 
     async def _update(body: str) -> None:
         if note_id is None:
@@ -535,12 +516,15 @@ async def _process_mr(
         sections: list[str] = [
             CommentBuilder.changed_files([f["new_path"] for f in relevant])
         ]
+        body = CommentBuilder.progress(STEP_ANALYSE, sections)
         try:
-            note_id = await gitlab.post_mr_comment(
-                project_id, mr_iid, CommentBuilder.progress(STEP_ANALYSE, sections)
-            )
+            if note_id:
+                await gitlab.edit_mr_comment(project_id, mr_iid, note_id, body)
+            else:
+                note_id = await gitlab.post_mr_comment(project_id, mr_iid, body)
+                _mr_comments[(project_id, mr_iid)] = note_id
         except Exception:
-            logger.warning(f"[MR !{mr_iid}] Could not post initial comment")
+            logger.warning(f"[MR !{mr_iid}] Could not post/reuse initial comment")
 
         # ── 3. Build diff-focused file contents ───────────────────────────
         file_contents: dict[str, str] = {}
@@ -552,24 +536,13 @@ async def _process_mr(
         # ── 4. Fetch example tests ─────────────────────────────────────────
         example_tests = await gitlab.get_example_tests(project_id, target_branch)
 
-        # ── 5. Review agents (parallel): engineer, guardian, scope, docs, risk ─
-        logger.info(f"[MR !{mr_iid}] Running review agents in parallel...")
+        # ── 5. Software Engineer + Code Guardian (parallel) ───────────────
+        logger.info(f"[MR !{mr_iid}] Running software-engineer + code-guardian in parallel...")
         diff_text = _format_diff(relevant)
         changed_paths = [f["new_path"] for f in relevant]
-
-        # Extra context for the Scope Matcher: project identity + linked Jira story.
-        project_ctx = await _gather_project_ctx(gitlab, project_id, target_branch)
-        issue_key = extract_issue_key(
-            mr_title, mr_description, source_branch, project_key=jira.project_key
-        )
-        story = await jira.get_issue(issue_key)
-
-        code_analysis, guardian_report, scope_report, doc_report, risk_report = await asyncio.gather(
+        code_analysis, guardian_report = await asyncio.gather(
             analyzer.analyze(mr_title, mr_description, diff_text, file_contents),
             guardian.review(mr_title, diff_text, file_contents),
-            scope_matcher.match(story, project_ctx, mr_title, mr_description, diff_text),
-            doc_reviewer.review(mr_title, mr_description, diff_text, changed_paths),
-            risk_assessor.assess(mr_title, mr_description, diff_text),
         )
         if code_analysis:
             sections.append(CommentBuilder.code_analysis(code_analysis))
@@ -579,9 +552,6 @@ async def _process_mr(
             sections.append(guardian_report.markdown)
         else:
             logger.warning(f"[MR !{mr_iid}] Code Guardian returned no findings.")
-        sections.append(CommentBuilder.scope_match(scope_report))
-        sections.append(CommentBuilder.documentation(doc_report))
-        sections.append(CommentBuilder.rollback_risk(risk_report))
         await _update(CommentBuilder.progress(STEP_GHERKIN, sections))
 
         # ── 6. Generate Gherkin ────────────────────────────────────────────
@@ -639,38 +609,20 @@ async def _process_mr(
         else:
             logger.warning(f"[MR !{mr_iid}] Quality gate FAILED: {gate.summary}")
 
-        # ── Opt-in actions (off by default) ───────────────────────────────
-        # Risk Marshal: drop a rollback-anchor tag on the target branch (a
-        # known-good pre-merge commit) when the gate passes.
-        if gate.passed and _flag("ROLLBACK_AUTOTAG"):
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-            tag_name = f"rollback/pre-mr{mr_iid}-{stamp}"
-            try:
-                created = await gitlab.create_tag(
-                    project_id, tag_name, target_branch,
-                    message=f"Rollback anchor before MR !{mr_iid}",
-                )
-                risk_report.rollback_tag = tag_name
-                sections.append(
-                    f"> 🏷️ **Risk Marshal** set rollback anchor `{tag_name}` on `{target_branch}`"
-                    + ("" if created else " (already existed)") + "."
-                )
-                logger.info(f"[MR !{mr_iid}] Rollback tag {tag_name} ensured on {target_branch}.")
-            except Exception as e:
-                logger.warning(f"[MR !{mr_iid}] Rollback tag failed: {e}")
-
-        # Change Herald: append the suggested changelog entry on the source branch.
-        if (
-            _flag("CHANGELOG_AUTOUPDATE")
-            and doc_report.available
-            and not doc_report.changelog_updated
-            and doc_report.suggested_changelog
-        ):
-            note = await _append_changelog(
-                gitlab, project_id, source_branch, doc_report.suggested_changelog, mr_iid
-            )
-            if note:
-                sections.append(note)
+        # ── 11. Advisory agents (shown at the end): scope, docs, risk ─────
+        await _update(CommentBuilder.progress(STEP_SCOPE, sections))
+        logger.info(f"[MR !{mr_iid}] Running scope / docs / risk agents...")
+        project_ctx = await _gather_project_ctx(gitlab, project_id, target_branch)
+        issue_key = extract_issue_key(mr_title, mr_description, source_branch, project_key=jira.project_key)
+        story = await jira.get_issue(issue_key)
+        scope_report, doc_report, risk_report = await asyncio.gather(
+            scope_matcher.match(story, project_ctx, mr_title, mr_description, diff_text),
+            doc_reviewer.review(mr_title, mr_description, diff_text, changed_paths),
+            risk_assessor.assess(mr_title, mr_description, diff_text),
+        )
+        sections.append(CommentBuilder.scope_match(scope_report))
+        sections.append(CommentBuilder.documentation(doc_report))
+        sections.append(CommentBuilder.rollback_risk(risk_report))
 
         # ── 11. Final comment update + commit status ──────────────────────
         sections.append(CommentBuilder.review_footer())

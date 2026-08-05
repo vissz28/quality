@@ -1,4 +1,4 @@
-# Agent: Trace Warden
+# Agent: Scope Analyzer
 
 *(scope & traceability — module `app/scope_matcher.py`)*
 

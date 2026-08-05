@@ -1,4 +1,4 @@
-# Agent: Change Herald
+# Agent: Docs Reviewer
 
 *(documentation & breaking changes — module `app/doc_reviewer.py`)*
 
@@ -26,6 +26,6 @@ and advisory **Quality Gate** rows.
 ## Operating Constraints
 - Advisory — never blocks the MR.
 - Judges docs/compat only — not code quality, security, style, or tests.
-- Read-only by default. The optional changelog assist is a *suggestion* in the
-  comment; auto-committing a changelog entry is opt-in via `CHANGELOG_AUTOUPDATE`.
+- **Read-only.** It reports whether docs/changelog were updated and drafts a
+  suggested changelog line; it never writes to the repo.
 - Runs in parallel with the other reviewers — no added latency.

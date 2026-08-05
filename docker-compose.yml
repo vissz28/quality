@@ -7,14 +7,13 @@ services:
     environment:
       # Execute generated Playwright tests on the Node.js runner service.
       RUNNER_URL: http://runner:3000
-      # Defaults to the local SonarQube over the compose network; set SONARQUBE_URL
-      # in .env to point at a hosted/self-managed server on deploy (that value
-      # wins). SONARQUBE_TOKEN (and, for multi-project setups,
-      # SONARQUBE_PROJECT_KEY) still come from .env.
+      # Set SONARQUBE_URL in .env to the SonarQube/SonarCloud server the bot reads
+      # (e.g. https://sonarcloud.io). Falls back to the bundled local server only
+      # when you start it with `--profile self-sonar`. SONARQUBE_TOKEN and
+      # SONARQUBE_PROJECT_KEY also come from .env.
       SONARQUBE_URL: ${SONARQUBE_URL:-http://sonarqube:9000}
     depends_on:
       - runner
-      - sonarqube
     restart: unless-stopped
 
   runner:
@@ -26,8 +25,11 @@ services:
   # Local SonarQube server. First boot takes ~1–2 min; until it's up the
   # SonarQube step is advisory (never blocks). Create a token in the UI
   # (My Account → Security) and put it in .env as SONARQUBE_TOKEN.
+  # Bundled local SonarQube — optional. Only starts with `--profile self-sonar`.
+  # Using SonarCloud / a hosted server instead? Leave this off and set SONARQUBE_URL.
   sonarqube:
     image: sonarqube:community
+    profiles: ["self-sonar"]
     depends_on:
       - sonardb
     ports:
@@ -50,6 +52,7 @@ services:
 
   sonardb:
     image: postgres:15
+    profiles: ["self-sonar"]
     environment:
       POSTGRES_USER: sonar
       POSTGRES_PASSWORD: sonar

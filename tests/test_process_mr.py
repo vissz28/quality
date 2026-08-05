@@ -17,7 +17,7 @@ from app.risk_assessor import RiskResult
 
 
 def _advisory_agents():
-    """Mocks for the advisory agents (Trace Warden / Change Herald / Risk Marshal)
+    """Mocks for the advisory agents (Scope Analyzer / Docs Reviewer / Risk Analyzer)
     and Jira, so the flow tests never construct real Anthropic clients."""
     scope = AsyncMock()
     scope.match.return_value = ScopeResult(available=False)
@@ -102,6 +102,7 @@ def _reset_state():
     main._processing.clear()
     main._done.clear()
     main._mr_locks.clear()
+    main._mr_comments.clear()
     yield
 
 
@@ -158,7 +159,7 @@ async def test_process_mr_full_flow_populates_comment():
 
     # Every process step is shown as a checklist item across the updates.
     all_text = "\n".join(comment_bodies)
-    assert "Internal pipeline passed" in all_text
+    assert "Internal pipeline" in all_text
     assert "Fetching MR changes" in all_text
     assert "Analysing code & security review" in all_text
     assert "Generating Gherkin scenarios" in all_text
@@ -179,12 +180,12 @@ async def test_process_mr_full_flow_populates_comment():
     assert "Playwright tests" in final
     assert "Test Execution Results" in final
 
-    # The three advisory agents render their own sections.
-    assert "Trace Warden" in final
-    assert "Change Herald" in final
-    assert "Risk Marshal" in final
+    # The three advisory agents render their own sections (technical names).
+    assert "Scope Analyzer" in final
+    assert "Docs Reviewer" in final
+    assert "Risk Analyzer" in final
     # New checklist steps are present and complete in the final comment.
-    assert "Scope & traceability match" in final
+    assert "Scope & traceability" in final
     assert "Rollback & risk" in final
 
     # The execution table is populated with per-scenario rows (not the empty msg).

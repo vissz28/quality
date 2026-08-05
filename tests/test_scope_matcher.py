@@ -1,4 +1,4 @@
-"""Unit tests for the Trace Warden / Change Herald / Risk Marshal agents —
+"""Unit tests for the Scope Analyzer / Docs Reviewer / Risk Analyzer agents —
 the deterministic, non-model parts and their advisory-by-default behaviour."""
 import os
 

@@ -1,4 +1,4 @@
-# Rules: Trace Warden
+# Rules: Scope Analyzer
 
 - **Advisory only.** Never fail or block an MR. Missing Jira config, no ticket key,
   no README, or any API/parse error → `available=False` → "not evaluated".

@@ -1,6 +1,6 @@
 """Rollback & Risk agent — rates deployment risk and rollback posture. Advisory
-only; never blocks. The optional rollback-anchor tag is created by main.py (gated
-by ROLLBACK_AUTOTAG), not here — this module only produces the assessment.
+and read-only: it reports the risk level, feature-flag safety, and whether the
+change can be safely rolled back. It never writes to the repo.
 """
 from __future__ import annotations
 
@@ -37,7 +37,6 @@ class RiskResult:
     feature_flag_safe: bool = True
     rollback_notes: str = ""
     rationale: str = ""
-    rollback_tag: str = ""           # set by main.py when a rollback tag is created
 
 
 class RiskAssessor:

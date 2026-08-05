@@ -12,33 +12,33 @@ if TYPE_CHECKING:
 
 _HEADER = "## 🤖 Quality Code"
 
-# Ordered pipeline of work shown as a live checklist in the MR comment. Index 0
-# is always complete by the time we post — we only start after the project's
-# internal pipeline has passed.
+# Ordered pipeline of work shown as a live checklist in the MR comment. Step 0
+# (the project's internal CI) is what we wait on — the rest starts once it finishes,
+# so the comment first appears with step 0 pending (⏳).
 STEPS = [
-    "Internal pipeline passed",
+    "Internal pipeline",
     "Fetching MR changes",
     "Analysing code & security review",
-    "Scope & traceability match",
-    "Documentation & breaking changes",
-    "Rollback & risk",
     "Generating Gherkin scenarios",
     "Generating Playwright tests",
     "Executing tests",
     "SonarQube analysis",
     "Quality gate",
+    "Scope & traceability",
+    "Documentation & breaking changes",
+    "Rollback & risk",
 ]
 # Named indices for readability from main.py.
 STEP_FETCH = 1
 STEP_ANALYSE = 2
-STEP_SCOPE = 3
-STEP_DOC = 4
-STEP_RISK = 5
-STEP_GHERKIN = 6
-STEP_PLAYWRIGHT = 7
-STEP_EXECUTE = 8
-STEP_SONAR = 9
-STEP_GATE = 10
+STEP_GHERKIN = 3
+STEP_PLAYWRIGHT = 4
+STEP_EXECUTE = 5
+STEP_SONAR = 6
+STEP_GATE = 7
+STEP_SCOPE = 8
+STEP_DOC = 9
+STEP_RISK = 10
 STEP_DONE = len(STEPS)
 
 
@@ -139,25 +139,70 @@ class CommentBuilder:
         return "> ⚠️ *Always review AI-generated tests before merging.*"
 
     _SONAR_RATING = {"1.0": "A", "2.0": "B", "3.0": "C", "4.0": "D", "5.0": "E"}
+    _SONAR_COMPARATOR = {"GT": ">", "GE": "≥", "GTE": "≥", "LT": "<", "LE": "≤", "LTE": "≤", "EQ": "=", "NE": "≠"}
     _SONAR_METRIC_LABELS = {
-        "bugs": "🐞 Bugs",
-        "vulnerabilities": "🔓 Vulnerabilities",
-        "code_smells": "👃 Code smells",
+        "new_coverage": "🧪 Coverage (new code)",
         "coverage": "🧪 Coverage",
+        "new_duplicated_lines_density": "📑 Duplication (new code)",
         "duplicated_lines_density": "📑 Duplication",
+        "new_maintainability_rating": "🛠️ Maintainability",
         "sqale_rating": "🛠️ Maintainability",
-        "security_rating": "🔒 Security",
+        "new_reliability_rating": "♻️ Reliability",
         "reliability_rating": "♻️ Reliability",
+        "new_security_rating": "🔒 Security",
+        "security_rating": "🔒 Security",
+        "new_security_hotspots_reviewed": "🛡️ Hotspots reviewed",
+        "security_hotspots_reviewed": "🛡️ Hotspots reviewed",
+        "new_violations": "⚠️ New issues",
+        "new_bugs": "🐞 New bugs",
+        "new_vulnerabilities": "🔓 New vulnerabilities",
+        "new_code_smells": "👃 New code smells",
     }
-    _SONAR_PERCENT = {"coverage", "duplicated_lines_density"}
-    _SONAR_RATING_METRICS = {"sqale_rating", "security_rating", "reliability_rating"}
+
+    @staticmethod
+    def _sonar_value(metric: str, value) -> str:
+        """Format a Sonar value: ratings -> A–E, percents -> N%, otherwise a number."""
+        if value in (None, ""):
+            return "—"
+        if metric.endswith("_rating"):
+            try:
+                return CommentBuilder._SONAR_RATING.get(f"{float(value):.1f}", str(value))
+            except (TypeError, ValueError):
+                return str(value)
+        if metric.endswith("coverage") or "duplicated_lines_density" in metric or "hotspots_reviewed" in metric:
+            try:
+                return f"{float(value):g}%"
+            except (TypeError, ValueError):
+                return f"{value}%"
+        try:
+            return f"{float(value):g}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    @staticmethod
+    def _sonar_condition_rows(conditions: list[dict]) -> list[str]:
+        """One row per gate condition: status · metric · required · actual."""
+        rows = []
+        for c in conditions or []:
+            metric = c.get("metricKey", "")
+            label = CommentBuilder._SONAR_METRIC_LABELS.get(metric, metric)
+            icon = "✅" if c.get("status") == "OK" else "❌"
+            actual = CommentBuilder._sonar_value(metric, c.get("actualValue"))
+            if metric.endswith("_rating"):
+                required = CommentBuilder._sonar_value(metric, c.get("errorThreshold"))
+            else:
+                comp = CommentBuilder._SONAR_COMPARATOR.get(c.get("comparator", ""), "")
+                required = f"{comp} {CommentBuilder._sonar_value(metric, c.get('errorThreshold'))}".strip()
+            rows.append(f"| {icon} | {label} | {required} | {actual} |")
+        return rows
 
     @staticmethod
     def sonarqube(result: SonarQubeResult) -> str:
-        """Render the SonarQube analysis section for the MR comment.
+        """Render the SonarQube gate as a Metric · Required · Actual · Status table.
 
-        Handles three states: not configured, configured-but-unavailable, and a
-        concrete OK/ERROR gate with headline measures.
+        Built from the server's own gate conditions (the values it actually
+        enforces), so it matches the Sonar Way quality gate exactly. Only the gate
+        metrics are shown — the important information, nothing else.
         """
         heading = "---\n\n### 📊 SonarQube"
 
@@ -171,20 +216,17 @@ class CommentBuilder:
         verdict = "✅ **PASSED**" if result.status == "OK" else "❌ **FAILED**"
         link = f" · [Open dashboard]({result.dashboard_url})" if result.dashboard_url else ""
 
-        rows = []
-        for metric, label in CommentBuilder._SONAR_METRIC_LABELS.items():
-            value = result.measures.get(metric)
-            if value is None:
-                continue
-            if metric in CommentBuilder._SONAR_RATING_METRICS:
-                value = CommentBuilder._SONAR_RATING.get(value, value)
-            elif metric in CommentBuilder._SONAR_PERCENT:
-                value = f"{value}%"
-            rows.append(f"| {label} | {value} |")
-
-        table = (
-            "| Metric | Value |\n|--------|-------|\n" + "\n".join(rows)
-        ) if rows else "_No measures available._"
+        rows = CommentBuilder._sonar_condition_rows(result.conditions)
+        if rows:
+            table = (
+                "| | Metric | Required | Actual |\n"
+                "|---|--------|----------|--------|\n" + "\n".join(rows)
+            )
+        else:
+            table = (
+                "_Gate passed — no conditions reported._"
+                if result.status == "OK" else "_No gate conditions available._"
+            )
 
         return f"{heading}\n\n> {verdict}{link}\n\n{table}\n"
 
@@ -203,17 +245,16 @@ class CommentBuilder:
         )
         return f"{heading}\n\n> {verdict}\n\n{table}\n"
 
-    # ── Scope, documentation, risk (advisory agents) ─────────────────────────
+    # ── Scope, documentation, risk (advisory agents — collapsible) ───────────
 
     @staticmethod
     def scope_match(result: "ScopeResult") -> str:
-        heading = "---\n\n### 🎯 Trace Warden — Scope & Traceability"
         if not result.available:
-            return (
-                f"{heading}\n\n> ⚪ Not evaluated — no linked Jira story found "
-                f"(set `JIRA_*` and reference a ticket key in the MR title/branch).\n"
+            return _details(
+                "🎯 <strong>Scope Analyzer</strong> — not evaluated",
+                "> ⚪ No linked Jira story (set `JIRA_*` and reference a ticket key in the MR title/branch).",
             )
-        verdict = "✅ **MATCHES STORY**" if result.matches else "⚠️ **POSSIBLE MISMATCH**"
+        verdict = "✅ Matches story" if result.matches else "⚠️ Possible mismatch"
         conf = f" · confidence: {result.confidence}" if result.confidence else ""
         if result.issue_url:
             link = f" · [{result.issue_key}]({result.issue_url})"
@@ -228,19 +269,17 @@ class CommentBuilder:
             f"{'yes' if result.story_fits_project else 'out of scope?'} |",
         ]
         table = "| | Check | Result |\n|---|-------|--------|\n" + "\n".join(rows)
-        body = f"{heading}\n\n> {verdict}{conf}{link}\n\n{table}\n"
+        body = f"> **{verdict}**{conf}{link}\n\n{table}"
         if result.rationale:
-            body += f"\n> {result.rationale}\n"
+            body += f"\n\n> {result.rationale}"
         if result.mismatches:
-            items = "\n".join(f"- {m}" for m in result.mismatches)
-            body += f"\n**Gaps / possible scope creep:**\n{items}\n"
-        return body
+            body += "\n\n**Gaps / possible scope creep:**\n" + "\n".join(f"- {m}" for m in result.mismatches)
+        return _details(f"🎯 <strong>Scope Analyzer</strong> — {verdict}", body)
 
     @staticmethod
     def documentation(result: "DocResult") -> str:
-        heading = "---\n\n### 📝 Change Herald — Documentation & Breaking Changes"
         if not result.available:
-            return f"{heading}\n\n> ⚪ Not evaluated.\n"
+            return _details("📝 <strong>Docs Reviewer</strong> — not evaluated", "> ⚪ Not evaluated.")
         breaking_doc = "—" if not result.breaking_changes else (
             "documented" if result.breaking_documented else "NOT documented"
         )
@@ -257,25 +296,20 @@ class CommentBuilder:
             f"{'yes' if result.backward_compatible else 'no'} |",
         ]
         table = "| | Check | Result |\n|---|-------|--------|\n" + "\n".join(rows)
-        body = f"{heading}\n\n{table}\n"
+        body = table
         if result.notes:
-            body += f"\n> {result.notes}\n"
+            body += f"\n\n> {result.notes}"
         if result.suggested_changelog:
-            body += f"\n**Suggested changelog entry** (no changelog change detected):\n```\n{result.suggested_changelog}\n```\n"
-        return body
+            body += f"\n\n**Suggested changelog entry** (no changelog change detected):\n```\n{result.suggested_changelog}\n```"
+        return _details("📝 <strong>Docs Reviewer</strong> — Documentation & Breaking Changes", body)
 
     _RISK_ICON = {"low": "🟢", "medium": "🟡", "high": "🔴"}
 
     @staticmethod
     def rollback_risk(result: "RiskResult") -> str:
-        heading = "---\n\n### 🛟 Risk Marshal — Rollback & Risk"
         if not result.available:
-            return f"{heading}\n\n> ⚪ Not evaluated.\n"
+            return _details("🛟 <strong>Risk Analyzer</strong> — not evaluated", "> ⚪ Not evaluated.")
         icon = CommentBuilder._RISK_ICON.get(result.risk_level, "🟢")
-        if result.rollback_tag:
-            anchor = f"🏷️ `{result.rollback_tag}`"
-        else:
-            anchor = result.rollback_notes or "—"
         flag_detail = (
             ("off by default" if result.feature_flag_safe else "defaults ON ⚠️")
             if result.feature_flag else "no new flag"
@@ -283,13 +317,13 @@ class CommentBuilder:
         rows = [
             f"| {icon} | Overall risk | **{result.risk_level.upper()}** |",
             f"| {'✅' if result.feature_flag_safe else '⚠️'} | Feature flag default safe | {flag_detail} |",
-            f"| {'🏷️' if result.rollback_tag else '•'} | Rollback anchor | {anchor} |",
+            f"| • | Can you roll back? | {result.rollback_notes or '—'} |",
         ]
         table = "| | Check | Result |\n|---|-------|--------|\n" + "\n".join(rows)
-        body = f"{heading}\n\n> {icon} Risk: **{result.risk_level.upper()}**\n\n{table}\n"
+        body = f"> {icon} Risk: **{result.risk_level.upper()}**\n\n{table}"
         if result.rationale:
-            body += f"\n> {result.rationale}\n"
-        return body
+            body += f"\n\n> {result.rationale}"
+        return _details(f"🛟 <strong>Risk Analyzer</strong> — {icon} {result.risk_level.upper()} risk", body)
 
     # ── Execution results ───────────────────────────────────────────────────
 

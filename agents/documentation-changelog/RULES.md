@@ -1,4 +1,4 @@
-# Rules: Change Herald
+# Rules: Docs Reviewer
 
 - **Advisory only.** Never fail or block an MR; every check is Pass / Fail / N/A.
 - **Scope.** Judge documentation, changelog, breaking changes, and backward
@@ -8,6 +8,7 @@
 - **Evidence-based.** Only call something a breaking change when it is visible in
   the diff (removed/renamed public surface, changed signature/response, non-additive
   schema change). Never assume untouched code.
-- **Suggestion, not action.** A drafted changelog line is shown in the comment for
-  the developer. Auto-committing it happens only when `CHANGELOG_AUTOUPDATE=true`.
-- **Read-only** unless the opt-in changelog action is explicitly enabled.
+- **Information, not action.** It only reports whether docs/changelog were updated
+  and (optionally) drafts a changelog line for the developer to copy. It never
+  writes to the repo.
+- **Read-only.** No commits, no file changes.

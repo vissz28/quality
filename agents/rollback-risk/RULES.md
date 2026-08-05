@@ -1,4 +1,4 @@
-# Rules: Risk Marshal
+# Rules: Risk Analyzer
 
 - **Advisory only.** Never fail or block an MR. Risk level is informational; a
   "high" rating warns, it does not gate.
@@ -6,8 +6,5 @@
   security findings, style, or tests.
 - **Evidence-based.** Base the risk rating and flag detection only on the diff and
   description. Never assume untouched code.
-- **Rollback tag is opt-in and safe.** Create it only when `ROLLBACK_AUTOTAG=true`
-  and the gate passes. It tags the target branch's current commit (a known-good
-  pre-merge point). Tags are non-destructive; never delete or move refs.
-- **No branch/code writes.** This agent never commits code or edits history — the
-  only optional write is creating a lightweight tag.
+- **Read-only.** This agent never writes to the repo — no tags, commits, or history
+  changes. It only reports the risk level and whether the change can be rolled back.
