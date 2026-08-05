@@ -138,6 +138,7 @@ async def test_process_mr_full_flow_populates_comment():
     executor.run.return_value = _execution_summary()
 
     scope, docrev, risk, jira = _advisory_agents()
+    jira.get_issue.return_value = {"summary": "Format numbers with unit suffixes"}
     with patch.object(main, "GitLabClient", return_value=gitlab), \
          patch.object(main, "TestGenerator", return_value=generator), \
          patch.object(main, "CodeAnalyzer", return_value=analyzer), \

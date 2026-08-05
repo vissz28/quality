@@ -666,7 +666,11 @@ async def _process_mr(
 
         # ── 10. Quality gate — computed here (needs sonar/guardian/execution),
         # but its section is rendered LAST, after the advisory agents below.
-        gate = QualityGate().evaluate(guardian_report, execution, sonar_status=sonar.status)
+        gate = QualityGate().evaluate(
+            guardian_report, execution,
+            sonar_status=sonar.status,
+            jira_story_linked=bool(story),
+        )
         if gate.passed:
             logger.info(f"[MR !{mr_iid}] Quality gate PASSED.")
         else:

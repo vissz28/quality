@@ -81,6 +81,7 @@ class QualityGate:
         execution: "ExecutionSummary",
         internal_pipeline_failed: bool = False,
         sonar_status: str | None = None,
+        jira_story_linked: bool = True,
     ) -> GateResult:
         checks: list[GateCheck] = []
 
@@ -90,6 +91,14 @@ class QualityGate:
             "Internal pipeline",
             not internal_pipeline_failed,
             "failed" if internal_pipeline_failed else "passed",
+        ))
+
+        # 2. Traceability — a Jira story must be linked (required). "linked" when
+        # a story is found; "N/A" and FAILED when the MR has no linked story.
+        checks.append(GateCheck(
+            "Jira story linked",
+            bool(jira_story_linked),
+            "linked" if jira_story_linked else "N/A",
         ))
 
         # 2. Security boundary — any high-severity security finding fails.

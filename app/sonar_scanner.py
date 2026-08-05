@@ -56,6 +56,19 @@ async def run_scan(
     host = os.environ.get("SONARQUBE_URL", "https://sonarcloud.io").rstrip("/")
     org = os.environ["SONAR_ORG"]
     scan_env = {**os.environ, "SONAR_TOKEN": os.environ["SONARQUBE_TOKEN"]}
+    # The scanner indexes the whole repo and is memory-hungry; the default heap
+    # OOMs on non-trivial repos. Raise it (tunable), but note the Render instance
+    # must actually have this much RAM free.
+    scan_env["SONAR_SCANNER_JAVA_OPTS"] = os.environ.get(
+        "SONAR_SCANNER_JAVA_OPTS", "-Xmx2048m"
+    )
+    # Skip vendored / build / generated dirs so we index far fewer files (less
+    # memory, faster) without losing signal on the actual source.
+    exclusions = os.environ.get(
+        "SONAR_EXCLUSIONS",
+        "**/node_modules/**,**/dist/**,**/build/**,**/.next/**,**/coverage/**,"
+        "**/vendor/**,**/*.min.js,**/*.map,**/__snapshots__/**",
+    )
     workdir = tempfile.mkdtemp(prefix="sonar-scan-")
     try:
         # Full clone so blame / new-code and the PR base branch are available.
@@ -71,6 +84,7 @@ async def run_scan(
             f"-Dsonar.organization={org}",
             f"-Dsonar.projectKey={project_key}",
             "-Dsonar.sources=.",
+            f"-Dsonar.exclusions={exclusions}",
         ]
         if mr_iid:
             args += [

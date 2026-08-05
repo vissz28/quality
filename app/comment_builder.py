@@ -259,7 +259,7 @@ class CommentBuilder:
     def scope_match(result: "ScopeResult") -> str:
         if not result.available:
             return _details(
-                "🎯 <strong>Scope Analyzer</strong> — not evaluated",
+                "🎯 <strong>Scope Analyzer</strong> — N/A",
                 "> ⚠️ No linked Jira story (set `JIRA_*` and reference a ticket key in the MR title/branch).",
             )
         verdict = "✅ Matches story" if result.matches else "⚠️ Possible mismatch"
