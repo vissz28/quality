@@ -30,6 +30,7 @@ from .scope_matcher import ScopeMatcher
 from .doc_reviewer import DocReviewer
 from .risk_assessor import RiskAssessor
 from .jira_client import JiraClient, extract_issue_key
+from . import sonar_scanner
 
 _VERSION = (Path(__file__).parent.parent / "VERSION").read_text().strip()
 
@@ -594,18 +595,24 @@ async def _process_mr(
         # ── 9. SonarQube — create → scan (this MR) → read → optional delete ─
         # SonarCloud is used only as a per-MR scan engine here: "new code" is the
         # MR's own diff (base↔source), so no persistent baseline/history is needed.
+        # The bot scans the MR ITSELF (in-bot scanner) — no separate GitLab project.
         await _update(CommentBuilder.progress(STEP_SONAR, sections))
         sonar_key = sonarqube.project_key(_project_path_from_url(project_web_url))
-        scan_enabled = bool(
-            os.environ.get("SONAR_SCAN_PROJECT_ID") and os.environ.get("SONAR_SCAN_TRIGGER_TOKEN")
-        )
-        if scan_enabled:
+        scan_enabled = False
+        if sonar_scanner.available():
             # Self-provision the project so a brand-new repo never hits
-            # "component not found", then scan scoped to this MR and wait.
+            # "component not found", then clone + scan this MR and wait.
+            await sonarqube.ensure_project(sonar_key)
+            scan_enabled = await sonar_scanner.run_scan(
+                _clone_url(project_web_url), source_branch, sonar_key, mr_iid, target_branch
+            )
+        elif os.environ.get("SONAR_SCAN_PROJECT_ID") and os.environ.get("SONAR_SCAN_TRIGGER_TOKEN"):
+            # Fallback: trigger a separate external scanner pipeline instead.
             await sonarqube.ensure_project(sonar_key)
             await _run_external_sonar_scan(
                 gitlab, sonar_key, project_web_url, source_branch, mr_iid, target_branch
             )
+            scan_enabled = True
         logger.info(f"[MR !{mr_iid}] Fetching SonarQube analysis...")
         sonar = await sonarqube.analyse(_project_path_from_url(project_web_url), source_branch, pull_request=mr_iid)
         sections.append(CommentBuilder.sonarqube(sonar))
@@ -695,6 +702,16 @@ def _project_path_from_url(web_url: str) -> str:
         return ""
     without_scheme = web_url.split("://", 1)[-1]
     return without_scheme.split("/", 1)[1] if "/" in without_scheme else ""
+
+
+def _clone_url(web_url: str) -> str:
+    """Build an authenticated clone URL for the reviewed repo from its web URL,
+    injecting the bot's GitLab token (read-only clone). e.g.
+    https://host/group/repo -> https://oauth2:<token>@host/group/repo.git"""
+    token = os.environ.get("GITLAB_TOKEN", "")
+    scheme, rest = web_url.split("://", 1) if "://" in web_url else ("https", web_url)
+    rest = rest.rstrip("/")
+    return f"{scheme}://oauth2:{token}@{rest}.git"
 
 
 def _env_flag(name: str) -> bool:

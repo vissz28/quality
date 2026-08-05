@@ -8,8 +8,24 @@ import asyncio
 from unittest.mock import AsyncMock
 
 import app.main as main
-from app.main import _run_external_sonar_scan
+from app.main import _run_external_sonar_scan, _clone_url
 from app.sonarqube_client import SonarQubeClient
+from app import sonar_scanner
+
+
+# ── In-bot scanner (clone URL + availability + no-op safety) ──────────────────
+
+def test_clone_url_injects_token(monkeypatch):
+    monkeypatch.setenv("GITLAB_TOKEN", "glpat-xyz")
+    assert _clone_url("https://gitlab.com/g/app") == "https://oauth2:glpat-xyz@gitlab.com/g/app.git"
+
+
+def test_scanner_unavailable_without_cli(monkeypatch):
+    # No sonar-scanner on PATH in CI → available() is False, run_scan is a no-op.
+    monkeypatch.setattr(sonar_scanner.shutil, "which", lambda _c: None)
+    assert sonar_scanner.available() is False
+    ok = asyncio.run(sonar_scanner.run_scan("url", "feat", "k", 3, "main"))
+    assert ok is False
 
 
 # ── SonarCloud project-key resolution (follows the repo being scanned) ────────

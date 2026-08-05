@@ -21,6 +21,18 @@ RUN apt-get update \
     && npx playwright install --with-deps chromium \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# SonarScanner CLI (bundled JRE) + git, so the bot can scan MRs itself (in-bot
+# SonarCloud scanner) — clone the reviewed repo and run sonar-scanner. The
+# linux-x64 build ships its own JRE, so no system Java is needed.
+ENV SONAR_SCANNER_VERSION=6.2.1.4610
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git unzip \
+    && curl -fsSLo /tmp/scanner.zip "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux-x64.zip" \
+    && unzip -q /tmp/scanner.zip -d /opt \
+    && ln -s "/opt/sonar-scanner-${SONAR_SCANNER_VERSION}-linux-x64/bin/sonar-scanner" /usr/local/bin/sonar-scanner \
+    && rm /tmp/scanner.zip \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /service
 
 COPY requirements.txt .

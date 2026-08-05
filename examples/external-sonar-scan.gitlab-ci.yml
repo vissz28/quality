@@ -30,8 +30,29 @@
 #     https://gitlab.com/api/v4/projects/<runner_project_id>/trigger/pipeline
 
 stages:
+  - prepare
   - scan
 
+# Job 1 — create the SonarCloud project (idempotent) so the scan never hits
+# "component not found". "already exists" (HTTP 400) is treated as success.
+create-sonar-project:
+  stage: prepare
+  image: curlimages/curl:latest
+  script:
+    - |
+      HTTP=$(curl -sS -o /tmp/out -w "%{http_code}" -u "$SONAR_TOKEN:" \
+        -X POST "https://sonarcloud.io/api/projects/create" \
+        -d "organization=$SONAR_ORG" \
+        -d "project=$SONAR_PROJECT_KEY" \
+        -d "name=$SONAR_PROJECT_KEY")
+      cat /tmp/out
+      if [ "$HTTP" = "200" ] || [ "$HTTP" = "201" ]; then echo "created"; \
+      elif [ "$HTTP" = "400" ] && grep -qi "exist" /tmp/out; then echo "already exists — ok"; \
+      else echo "create failed ($HTTP)"; exit 1; fi
+  rules:
+    - if: $TARGET_REPO
+
+# Job 2 — clone the reviewed repo and scan it into that project.
 sonar-scan:
   stage: scan
   image: sonarsource/sonar-scanner-cli:latest   # shared runners run this image
