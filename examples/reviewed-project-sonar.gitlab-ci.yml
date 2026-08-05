@@ -1,0 +1,61 @@
+# ── SonarCloud scan INSIDE the reviewed project's own CI (SHELL runner) ───────
+# Paste this into the reviewed project's `.gitlab-ci.yml` (the repo with the
+# webhook). No separate scanner project, no trigger token, no SONAR_SCAN_* on the
+# bot — the project scans ITSELF on each MR and uploads to SonarCloud; the bot
+# only READS the result and posts it in the comment.
+#
+# SonarCloud can't auto-scan GitLab, so this job runs the scanner. It uses a SHELL
+# runner (no Docker) and the SonarScanner CLI's bundled JRE, so the runner only
+# needs git, curl and unzip — no system Java.
+#
+# Set once on THIS project (Settings → CI/CD → Variables, masked):
+#   SONAR_TOKEN   SonarCloud token (upload)
+#   SONAR_ORG     SonarCloud organization key (e.g. vissz28)
+# The project key is derived below as <SONAR_ORG>_<repo> to match what the bot
+# reads; override with SONAR_PROJECT_KEY if your key differs.
+#
+# On the BOT: leave SONAR_SCAN_PROJECT_ID / SONAR_SCAN_TRIGGER_TOKEN UNSET (it
+# only reads), keep SONARQUBE_URL / SONARQUBE_TOKEN / SONAR_ORG.
+
+stages:
+  - sonar
+
+sonarcloud:
+  stage: sonar
+  tags:
+    - shell                       # <-- set to YOUR shell runner's tag
+  # Don't fail the whole pipeline (and block the bot) on a red Sonar gate — the
+  # bot reads the ERROR status and reflects it in the Quality Gate instead.
+  allow_failure: true
+  variables:
+    GIT_DEPTH: "0"                # full history for accurate blame / new-code
+    SONAR_SCANNER_VERSION: "6.2.1.4610"
+  script:
+    - curl -sSLo scanner.zip "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux-x64.zip"
+    - unzip -oq scanner.zip
+    - export PATH="$PWD/sonar-scanner-${SONAR_SCANNER_VERSION}-linux-x64/bin:$PATH"
+    - export KEY="${SONAR_PROJECT_KEY:-${SONAR_ORG}_${CI_PROJECT_NAME}}"
+    # GitLab's predefined CI vars auto-set PR context; pass them explicitly so the
+    # scan is a pull-request analysis (new code = the MR diff).
+    - |
+      if [ -n "$CI_MERGE_REQUEST_IID" ]; then
+        SCOPE="-Dsonar.pullrequest.key=$CI_MERGE_REQUEST_IID -Dsonar.pullrequest.branch=$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME -Dsonar.pullrequest.base=$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+      else
+        SCOPE="-Dsonar.branch.name=$CI_COMMIT_REF_NAME"
+      fi
+    # qualitygate.wait makes the job block until SonarCloud finishes computing the
+    # gate, so the analysis is fully ready when the bot reads it. Combined with
+    # allow_failure above, a red gate marks this job failed (allowed) — it never
+    # blocks the internal pipeline or the bot.
+    - >
+      sonar-scanner
+      -Dsonar.host.url=https://sonarcloud.io
+      -Dsonar.organization=$SONAR_ORG
+      -Dsonar.projectKey=$KEY
+      -Dsonar.token=$SONAR_TOKEN
+      -Dsonar.sources=.
+      $SCOPE
+      -Dsonar.qualitygate.wait=true
+  rules:
+    - if: $CI_MERGE_REQUEST_IID   # run on every MR (produces PR analysis)
+    - if: $CI_COMMIT_BRANCH == "main"
