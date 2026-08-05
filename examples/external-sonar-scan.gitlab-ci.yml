@@ -1,44 +1,32 @@
-# ── External SonarCloud scanner pipeline (bot-owned, SHELL runner / no Docker) ─
-# A standalone GitLab project whose ONLY job is to scan a target repo and upload
-# results to SonarCloud. SonarCloud cannot auto-scan GitLab repos, so a scanner
-# must run — this one runs on a plain GitLab SHELL runner (no Docker image). The
-# SonarScanner CLI ships a bundled JRE, so the runner only needs git, curl, unzip
-# (no system Java). This is the "SonarQube pipeline" of the bot's three checks:
-# the quality bot TRIGGERS it per MR, waits, then reads the result and posts the
-# table.
+# ── External SonarCloud scanner pipeline (bot-owned, separate project) ────────
+# A standalone GitLab project whose ONLY job is to clone the reviewed repo and
+# scan it into SonarCloud. The reviewed project is NEVER modified (cloned
+# read-only). SonarCloud can't auto-scan GitLab, so this pipeline is the scanner.
+# It's the "SonarQube pipeline" of the bot's three checks: the quality bot
+# TRIGGERS it per MR, waits, then reads the result and posts the table.
+#
+# Runner: uses the sonar-scanner-cli Docker IMAGE, which runs on GitLab's shared
+# runners — that's GitLab running the container, not you. No tags needed.
 #
 # Wiring: create this project in GitLab, add a pipeline trigger token
 # (Settings → CI/CD → Pipeline trigger tokens), then set on the BOT (Render):
 #   SONAR_SCAN_PROJECT_ID     this project's numeric id
 #   SONAR_SCAN_TRIGGER_TOKEN  the trigger token
-# The bot passes TARGET_REPO / TARGET_REF / SONAR_PROJECT_KEY / MR_IID / TARGET_BASE.
+# The bot passes TARGET_REPO / TARGET_REF / SONAR_PROJECT_KEY / MR_IID / TARGET_BASE
+# and self-provisions the SonarCloud project first, so a first scan won't 404.
 #
 # Set once on THIS project (Settings → CI/CD → Variables, masked):
-#   SONAR_TOKEN   SonarCloud token
+#   SONAR_TOKEN   SonarCloud token (upload)
 #   SONAR_ORG     SonarCloud organization key (e.g. vissz28)
 #   TARGET_TOKEN  a GitLab token (read_repository) that can clone the target repo
-#
-# Runner: this job needs a SHELL (or ssh) runner with git, curl and unzip on the
-# host. Set the `tags:` below to match that runner's tag.
-#
-# Pipeline variables the bot sends (or set them by hand to test):
-#   TARGET_REPO         host/group/repo.git of the project to scan (no scheme)
-#   TARGET_REF          branch to scan (the MR source branch)
-#   SONAR_PROJECT_KEY   the SonarCloud project key (e.g. vissz28_quality)
-#   MR_IID              (optional) merge-request iid → scan as a PR
-#   TARGET_BASE         (optional) the MR target branch → PR base (default main)
-#
-# NOTE: the SonarCloud project must exist first. The bot self-provisions it
-# (POST /api/projects/create) before triggering, so a first scan won't hit
-# "component not found".
 #
 # Manual trigger (for testing without the bot):
 #   curl -X POST \
 #     -F token=$TRIGGER_TOKEN -F ref=main \
 #     -F "variables[TARGET_REPO]=gitlab.com/group/app.git" \
 #     -F "variables[TARGET_REF]=$SOURCE_BRANCH" \
-#     -F "variables[SONAR_PROJECT_KEY]=vissz28_quality" \
-#     -F "variables[MR_IID]=$MR_IID" \
+#     -F "variables[SONAR_PROJECT_KEY]=vissz28_analytics-charting-package" \
+#     -F "variables[MR_IID]=14" \
 #     https://gitlab.com/api/v4/projects/<runner_project_id>/trigger/pipeline
 
 stages:
@@ -46,28 +34,23 @@ stages:
 
 sonar-scan:
   stage: scan
-  tags:
-    - shell                       # <-- set to YOUR shell runner's tag
+  image: sonarsource/sonar-scanner-cli:latest   # shared runners run this image
   variables:
     GIT_STRATEGY: none            # we clone the TARGET repo ourselves, not this one
-    SONAR_SCANNER_VERSION: "6.2.1.4610"
+  before_script:
+    - command -v git >/dev/null 2>&1 || apk add --no-cache git
   script:
-    # 1. Full clone of the target (all branches/history) for accurate blame /
-    #    new-code and, for PRs, so the base branch is present to diff against.
+    # Full clone (all branches/history) so SonarCloud gets accurate blame /
+    # new-code and, for PRs, the base branch to diff against.
     - git clone "https://oauth2:${TARGET_TOKEN}@${TARGET_REPO}" target
     - cd target && git checkout "$TARGET_REF" && cd ..
-    # 2. Download the SonarScanner CLI (bundled JRE — no Docker, no system Java).
-    - curl -sSLo scanner.zip "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux-x64.zip"
-    - unzip -oq scanner.zip
-    - export PATH="$PWD/sonar-scanner-${SONAR_SCANNER_VERSION}-linux-x64/bin:$PATH"
-    # 3. PR scope when triggered for an MR, else a plain branch scan.
-    - cd target
     - |
       if [ -n "$MR_IID" ]; then
         SCOPE="-Dsonar.pullrequest.key=$MR_IID -Dsonar.pullrequest.branch=$TARGET_REF -Dsonar.pullrequest.base=${TARGET_BASE:-main}"
       else
         SCOPE="-Dsonar.branch.name=$TARGET_REF"
       fi
+    - cd target
     - >
       sonar-scanner
       -Dsonar.host.url=https://sonarcloud.io
