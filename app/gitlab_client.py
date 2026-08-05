@@ -237,6 +237,41 @@ class GitLabClient:
             )
             r.raise_for_status()
 
+    # ── Pipeline triggers (external SonarCloud scan) ─────────────────────────────
+
+    async def trigger_pipeline(
+        self, project_id: str, ref: str, token: str, variables: dict | None = None
+    ) -> dict | None:
+        """Trigger a pipeline in the scanner project via its trigger token.
+
+        The trigger token authenticates the call, so no PRIVATE-TOKEN header is
+        used. Variables become pipeline variables (`variables[KEY]=value`).
+        Returns the created pipeline JSON (has `id`, `status`, `web_url`), or None."""
+        url = f"{self.base}/projects/{project_id}/trigger/pipeline"
+        data = {"token": token, "ref": ref}
+        for k, v in (variables or {}).items():
+            data[f"variables[{k}]"] = str(v)
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.post(url, data=data)
+                if r.status_code not in (200, 201):
+                    return None
+                return r.json()
+        except Exception:
+            return None
+
+    async def get_pipeline(self, project_id: str, pipeline_id: int) -> dict | None:
+        """Return a single pipeline by id (for polling status), or None on error."""
+        url = f"{self.base}/projects/{project_id}/pipelines/{pipeline_id}"
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(url, headers=self.headers)
+                if r.status_code != 200:
+                    return None
+                return r.json()
+        except Exception:
+            return None
+
     # ── Project ─────────────────────────────────────────────────────────────────
 
     async def get_project(self, project_id: int) -> dict:

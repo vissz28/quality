@@ -2,9 +2,9 @@
 self-hosted SonarQube server so it can be surfaced as a pipeline step and folded
 into the Quality Gate verdict.
 
-This never runs a scan itself; the integrated project's own CI does that. We only
-read the already-computed result via the SonarQube Web API. Configuration comes
-from the environment:
+This client never runs a scan itself; the bot's external scan pipeline does that
+(see _run_external_sonar_scan in app/main.py). We only read the already-computed
+result via the SonarQube Web API. Configuration comes from the environment:
 
     SONARQUBE_URL          base URL of the self-hosted server (required to enable)
     SONARQUBE_TOKEN        user/project analysis token (required to enable)
@@ -61,12 +61,27 @@ class SonarQubeClient:
         return bool(self.base and self.token)
 
     def project_key(self, project_path: str | None) -> str:
-        """Resolve the SonarQube project key.
+        """Resolve the SonarCloud/SonarQube project key for the repo being scanned.
 
-        Prefers an explicit env override (single-project setups); otherwise uses
-        the GitLab project path so a single deployment can serve many projects.
+        The key must follow whichever repo the pipeline is running on, resolved in
+        order:
+          1. SONARQUBE_PROJECT_KEY — explicit override for a single-repo deployment.
+          2. SONAR_ORG set — SonarCloud keys are org-prefixed, so derive
+             `<org>_<repo>` from the reviewed project path (e.g. vissz28 + quality
+             -> vissz28_quality). This lets one deployment scan many repos, each
+             into its own SonarCloud project.
+          3. Fallback — the raw GitLab path (group/repo), for self-hosted SonarQube
+             where keys aren't org-prefixed.
         """
-        return os.environ.get("SONARQUBE_PROJECT_KEY") or (project_path or "")
+        explicit = os.environ.get("SONARQUBE_PROJECT_KEY")
+        if explicit:
+            return explicit
+        path = project_path or ""
+        org = os.environ.get("SONAR_ORG")
+        if org and path:
+            repo = path.rstrip("/").split("/")[-1]
+            return f"{org}_{repo}"
+        return path
 
     def _dashboard_url(self, project_key: str, branch: str) -> str:
         url = f"{self.base}/dashboard?id={project_key}"

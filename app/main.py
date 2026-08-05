@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -590,8 +591,12 @@ async def _process_mr(
                 f"{execution.failed} failed, {execution.skipped} skipped."
             )
 
-        # ── 9. SonarQube — read the project's quality gate from the server ─
+        # ── 9. SonarQube — run the bot's external scan pipeline, then read ─
         await _update(CommentBuilder.progress(STEP_SONAR, sections))
+        sonar_key = sonarqube.project_key(_project_path_from_url(project_web_url))
+        # Trigger the bot-owned external scanner (no-op unless SONAR_SCAN_* set)
+        # and wait for it so the read below sees this MR's fresh analysis.
+        await _run_external_sonar_scan(gitlab, sonar_key, project_web_url, source_branch, mr_iid)
         logger.info(f"[MR !{mr_iid}] Fetching SonarQube analysis...")
         sonar = await sonarqube.analyse(_project_path_from_url(project_web_url), source_branch, pull_request=mr_iid)
         sections.append(CommentBuilder.sonarqube(sonar))
@@ -676,6 +681,65 @@ def _project_path_from_url(web_url: str) -> str:
         return ""
     without_scheme = web_url.split("://", 1)[-1]
     return without_scheme.split("/", 1)[1] if "/" in without_scheme else ""
+
+
+async def _run_external_sonar_scan(
+    gitlab: GitLabClient,
+    sonar_project_key: str,
+    project_web_url: str,
+    source_branch: str,
+    mr_iid: int | None,
+) -> str | None:
+    """Trigger the bot-owned external SonarCloud scanner pipeline and wait for it.
+
+    This is the "SonarQube pipeline" of the three checks: a standalone GitLab
+    project (examples/external-sonar-scan.gitlab-ci.yml) whose only job is to scan
+    the reviewed repo and upload to SonarCloud. The bot triggers it per MR, waits
+    for it to finish (its scanner runs with `sonar.qualitygate.wait`, so on success
+    SonarCloud already has the analysis), then the caller reads the result.
+
+    Env-gated — a no-op returning None unless both are set:
+        SONAR_SCAN_PROJECT_ID       numeric id of the scanner GitLab project
+        SONAR_SCAN_TRIGGER_TOKEN    that project's pipeline trigger token
+    Optional:
+        SONAR_SCAN_REF              scanner branch to run (default "main")
+        SONAR_SCAN_TIMEOUT          seconds to wait for it (default 300)
+    """
+    scan_project = os.environ.get("SONAR_SCAN_PROJECT_ID", "")
+    trigger_token = os.environ.get("SONAR_SCAN_TRIGGER_TOKEN", "")
+    if not (scan_project and trigger_token):
+        return None  # feature not configured — caller just reads whatever exists
+
+    ref = os.environ.get("SONAR_SCAN_REF", "main")
+    timeout = int(os.environ.get("SONAR_SCAN_TIMEOUT", "300"))
+    # host/group/repo.git — what the scanner clones (no scheme).
+    target_repo = project_web_url.split("://", 1)[-1].rstrip("/") + ".git"
+
+    variables = {
+        "TARGET_REPO": target_repo,
+        "TARGET_REF": source_branch,
+        "SONAR_PROJECT_KEY": sonar_project_key,
+    }
+    if mr_iid:
+        variables["MR_IID"] = str(mr_iid)
+
+    logger.info(f"[MR !{mr_iid}] Triggering external SonarCloud scan pipeline…")
+    pipeline = await gitlab.trigger_pipeline(scan_project, ref, trigger_token, variables)
+    if not pipeline or "id" not in pipeline:
+        logger.warning(f"[MR !{mr_iid}] Could not trigger the SonarCloud scan pipeline.")
+        return None
+
+    pid = pipeline["id"]
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(WATCH_INTERVAL)
+        p = await gitlab.get_pipeline(scan_project, pid)
+        status = (p or {}).get("status")
+        if status in ("success", "failed", "canceled", "skipped"):
+            logger.info(f"[MR !{mr_iid}] SonarCloud scan pipeline {pid} finished: {status}.")
+            return status
+    logger.warning(f"[MR !{mr_iid}] SonarCloud scan pipeline {pid} did not finish within {timeout}s.")
+    return "running"
 
 
 RELEVANT_EXTENSIONS = {
