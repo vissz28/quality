@@ -24,10 +24,17 @@ import tempfile
 logger = logging.getLogger(__name__)
 
 
+def _enabled() -> bool:
+    """In-bot scanning is OPT-IN: the scanner is memory-heavy and can OOM-kill
+    the whole service on a small instance. Only run it when explicitly enabled."""
+    return os.environ.get("SONAR_INBOT_SCAN", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def available() -> bool:
-    """True when the CLI and git are present and SonarCloud upload is configured."""
+    """True when in-bot scanning is enabled AND the CLI/git/token/org are present."""
     return bool(
-        shutil.which("sonar-scanner")
+        _enabled()
+        and shutil.which("sonar-scanner")
         and shutil.which("git")
         and os.environ.get("SONARQUBE_TOKEN")
         and os.environ.get("SONAR_ORG")
