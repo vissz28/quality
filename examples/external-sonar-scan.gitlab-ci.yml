@@ -79,6 +79,7 @@ sonar-scan:
       -Dsonar.projectKey=$SONAR_PROJECT_KEY
       -Dsonar.token=$SONAR_TOKEN
       -Dsonar.sources=.
+      -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**,**/.next/**,**/coverage/**,**/vendor/**,**/*.min.js,**/*.map
       $SCOPE
       -Dsonar.qualitygate.wait=true
   rules:
