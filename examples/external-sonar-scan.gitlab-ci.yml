@@ -21,6 +21,12 @@
 #   TARGET_REF          branch to scan (the MR source branch)
 #   SONAR_PROJECT_KEY   the SonarCloud project key (e.g. vissz28_quality)
 #   MR_IID              (optional) merge-request iid → scan as a PR
+#   TARGET_BASE         (optional) the MR target branch → PR base (default main)
+#
+# NOTE: the SonarCloud project must exist first. A PR-only scan against a project
+# that was never analysed fails with "Component ... of pull request N not found".
+# Run one branch scan on the default branch (no MR_IID) to create + baseline it,
+# then PR scans resolve.
 #
 # Manual trigger (for testing without the bot):
 #   curl -X POST \
@@ -30,6 +36,7 @@
 #     -F "variables[TARGET_REF]=$SOURCE_BRANCH" \
 #     -F "variables[SONAR_PROJECT_KEY]=vissz28_quality" \
 #     -F "variables[MR_IID]=$MR_IID" \
+#     -F "variables[TARGET_BASE]=main" \
 #     https://gitlab.com/api/v4/projects/<runner_project_id>/trigger/pipeline
 
 stages:
@@ -40,18 +47,24 @@ sonar-scan:
   image: sonarsource/sonar-scanner-cli:latest
   variables:
     GIT_STRATEGY: none          # we clone the TARGET repo ourselves, not this one
-    GIT_DEPTH: "0"
   script:
-    - git clone --depth=50 --branch "$TARGET_REF" "https://oauth2:${TARGET_TOKEN}@${TARGET_REPO}" target
+    # Full clone (all branches, full history) so SonarCloud can compute accurate
+    # blame / new-code and, for PRs, diff the source against the base branch.
+    - git clone "https://oauth2:${TARGET_TOKEN}@${TARGET_REPO}" target
     - cd target
+    - git checkout "$TARGET_REF"
     - |
-      SCOPE="-Dsonar.branch.name=$TARGET_REF"
-      if [ -n "$MR_IID" ]; then SCOPE="-Dsonar.pullrequest.key=$MR_IID -Dsonar.pullrequest.branch=$TARGET_REF"; fi
+      if [ -n "$MR_IID" ]; then
+        SCOPE="-Dsonar.pullrequest.key=$MR_IID -Dsonar.pullrequest.branch=$TARGET_REF -Dsonar.pullrequest.base=${TARGET_BASE:-main}"
+      else
+        SCOPE="-Dsonar.branch.name=$TARGET_REF"
+      fi
     - sonar-scanner
         -Dsonar.host.url=https://sonarcloud.io
         -Dsonar.organization=$SONAR_ORG
         -Dsonar.projectKey=$SONAR_PROJECT_KEY
         -Dsonar.token=$SONAR_TOKEN
+        -Dsonar.sources=.
         $SCOPE
         -Dsonar.qualitygate.wait=true
   rules:

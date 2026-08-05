@@ -591,12 +591,21 @@ async def _process_mr(
                 f"{execution.failed} failed, {execution.skipped} skipped."
             )
 
-        # ── 9. SonarQube — run the bot's external scan pipeline, then read ─
+        # ── 9. SonarQube — create → scan (this MR) → read → optional delete ─
+        # SonarCloud is used only as a per-MR scan engine here: "new code" is the
+        # MR's own diff (base↔source), so no persistent baseline/history is needed.
         await _update(CommentBuilder.progress(STEP_SONAR, sections))
         sonar_key = sonarqube.project_key(_project_path_from_url(project_web_url))
-        # Trigger the bot-owned external scanner (no-op unless SONAR_SCAN_* set)
-        # and wait for it so the read below sees this MR's fresh analysis.
-        await _run_external_sonar_scan(gitlab, sonar_key, project_web_url, source_branch, mr_iid)
+        scan_enabled = bool(
+            os.environ.get("SONAR_SCAN_PROJECT_ID") and os.environ.get("SONAR_SCAN_TRIGGER_TOKEN")
+        )
+        if scan_enabled:
+            # Self-provision the project so a brand-new repo never hits
+            # "component not found", then scan scoped to this MR and wait.
+            await sonarqube.ensure_project(sonar_key)
+            await _run_external_sonar_scan(
+                gitlab, sonar_key, project_web_url, source_branch, mr_iid, target_branch
+            )
         logger.info(f"[MR !{mr_iid}] Fetching SonarQube analysis...")
         sonar = await sonarqube.analyse(_project_path_from_url(project_web_url), source_branch, pull_request=mr_iid)
         sections.append(CommentBuilder.sonarqube(sonar))
@@ -604,6 +613,11 @@ async def _process_mr(
             logger.warning(f"[MR !{mr_iid}] SonarQube unavailable: {sonar.error}")
         elif sonar.configured:
             logger.info(f"[MR !{mr_iid}] SonarQube status: {sonar.status}")
+        # Ephemeral cleanup: drop the project once results are read (opt-in; needs
+        # an admin-scoped token). Safe because the verdict is already captured above.
+        if scan_enabled and _env_flag("SONAR_SCAN_EPHEMERAL"):
+            deleted = await sonarqube.delete_project(sonar_key)
+            logger.info(f"[MR !{mr_iid}] Ephemeral SonarCloud project delete: {deleted}")
 
         # ── 10. Quality gate — the final security/policy boundary ─────────
         await _update(CommentBuilder.progress(STEP_GATE, sections))
@@ -683,12 +697,18 @@ def _project_path_from_url(web_url: str) -> str:
     return without_scheme.split("/", 1)[1] if "/" in without_scheme else ""
 
 
+def _env_flag(name: str) -> bool:
+    """True when an env var is set to a truthy string (1/true/yes/on)."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 async def _run_external_sonar_scan(
     gitlab: GitLabClient,
     sonar_project_key: str,
     project_web_url: str,
     source_branch: str,
     mr_iid: int | None,
+    target_branch: str = "",
 ) -> str | None:
     """Trigger the bot-owned external SonarCloud scanner pipeline and wait for it.
 
@@ -722,6 +742,8 @@ async def _run_external_sonar_scan(
     }
     if mr_iid:
         variables["MR_IID"] = str(mr_iid)
+    if target_branch:
+        variables["TARGET_BASE"] = target_branch  # PR base for accurate new-code diff
 
     logger.info(f"[MR !{mr_iid}] Triggering external SonarCloud scan pipeline…")
     pipeline = await gitlab.trigger_pipeline(scan_project, ref, trigger_token, variables)

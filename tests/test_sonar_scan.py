@@ -32,6 +32,25 @@ def test_key_falls_back_to_path(monkeypatch):
     assert SonarQubeClient().project_key("group/repo") == "group/repo"
 
 
+# ── Ephemeral project lifecycle (create / delete are no-ops when unconfigured) ─
+
+def test_ensure_and_delete_noop_when_unconfigured(monkeypatch):
+    monkeypatch.delenv("SONARQUBE_URL", raising=False)
+    monkeypatch.delenv("SONARQUBE_TOKEN", raising=False)
+    client = SonarQubeClient()
+    assert asyncio.run(client.ensure_project("k")) is False
+    assert asyncio.run(client.delete_project("k")) is False
+
+
+def test_env_flag_parsing(monkeypatch):
+    monkeypatch.setenv("SONAR_SCAN_EPHEMERAL", "TRUE")
+    assert main._env_flag("SONAR_SCAN_EPHEMERAL") is True
+    monkeypatch.setenv("SONAR_SCAN_EPHEMERAL", "false")
+    assert main._env_flag("SONAR_SCAN_EPHEMERAL") is False
+    monkeypatch.delenv("SONAR_SCAN_EPHEMERAL", raising=False)
+    assert main._env_flag("SONAR_SCAN_EPHEMERAL") is False
+
+
 def _fake_gitlab():
     g = AsyncMock()
     return g

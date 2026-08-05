@@ -83,6 +83,43 @@ class SonarQubeClient:
             return f"{org}_{repo}"
         return path
 
+    async def ensure_project(self, project_key: str) -> bool:
+        """Create the SonarCloud/SonarQube project if missing (idempotent).
+
+        Prevents "component ... not found" on a repo's first scan. No-op when the
+        client is unconfigured or no key is given. Treats an "already exists" 400
+        as success. Never raises — provisioning is best-effort.
+        """
+        if not self.configured or not project_key:
+            return False
+        data = {"project": project_key, "name": project_key.split("_")[-1] or project_key}
+        org = os.environ.get("SONAR_ORG")
+        if org:
+            data["organization"] = org
+        try:
+            async with httpx.AsyncClient(timeout=15, auth=self._auth) as client:
+                r = await client.post(f"{self.base}/api/projects/create", data=data)
+                if r.status_code in (200, 201):
+                    return True
+                # Already provisioned (manually or by a prior scan) → fine.
+                return r.status_code == 400 and "exist" in r.text.lower()
+        except Exception:
+            return False
+
+    async def delete_project(self, project_key: str) -> bool:
+        """Delete the project — used for ephemeral scan cleanup (create→scan→read→
+        delete). Requires an admin-scoped token. No-op when unconfigured/no key;
+        never raises.
+        """
+        if not self.configured or not project_key:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=15, auth=self._auth) as client:
+                r = await client.post(f"{self.base}/api/projects/delete", data={"project": project_key})
+                return r.status_code in (200, 204)
+        except Exception:
+            return False
+
     def _dashboard_url(self, project_key: str, branch: str) -> str:
         url = f"{self.base}/dashboard?id={project_key}"
         if branch:
