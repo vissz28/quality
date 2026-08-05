@@ -106,9 +106,15 @@ async def _run(cmd: list[str], cwd: str | None = None, env: dict | None = None) 
     out, _ = await proc.communicate()
     if proc.returncode != 0 and out:
         text = out.decode("utf-8", "replace")
-        # Surface the actual ERROR lines (the real cause), not just the stack tail.
-        errors = [ln for ln in text.splitlines() if "ERROR" in ln][:10]
-        if errors:
-            logger.warning("scan ERROR lines:\n%s", "\n".join(errors))
-        logger.info("scan cmd output tail: %s", text[-800:])
+        # Surface the actual root cause — the wrapper "ERROR" line hides it in a
+        # "Caused by:" / exception line, so match those too.
+        _KEYS = (
+            "error", "caused by", "exception", "authoriz", "authentic",
+            "not permitted", "forbidden", "403", "401", "does not exist",
+            "license", "quality gate", "not found", "base branch", "insufficient",
+        )
+        diag = [ln for ln in text.splitlines() if any(k in ln.lower() for k in _KEYS)][:25]
+        if diag:
+            logger.warning("scan diagnostic lines:\n%s", "\n".join(diag))
+        logger.info("scan cmd output tail:\n%s", text[-1500:])
     return proc.returncode if proc.returncode is not None else 1

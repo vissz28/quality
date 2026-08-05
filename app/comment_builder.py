@@ -254,7 +254,7 @@ class CommentBuilder:
         if not result.available:
             return _details(
                 "🎯 <strong>Scope Analyzer</strong> — not evaluated",
-                "> ⚪ No linked Jira story (set `JIRA_*` and reference a ticket key in the MR title/branch).",
+                "> ⚠️ No linked Jira story (set `JIRA_*` and reference a ticket key in the MR title/branch).",
             )
         verdict = "✅ Matches story" if result.matches else "⚠️ Possible mismatch"
         conf = f" · confidence: {result.confidence}" if result.confidence else ""

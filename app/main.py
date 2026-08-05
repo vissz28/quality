@@ -568,7 +568,8 @@ async def _process_mr(
         scope_report = await scope_matcher.match(
             story, project_ctx, mr_title, mr_description, diff_text
         )
-        sections.append(CommentBuilder.scope_match(scope_report))
+        # Scope & traceability is the FIRST section in the comment.
+        sections.insert(0, CommentBuilder.scope_match(scope_report))
         await _update(CommentBuilder.progress(STEP_ANALYSE, sections))
 
         # ── 4. Fetch example tests ─────────────────────────────────────────
