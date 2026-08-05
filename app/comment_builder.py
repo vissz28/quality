@@ -23,14 +23,14 @@ STEPS = [
     "Generating Playwright tests",
     "Executing tests",
     "SonarQube analysis",
-    "Quality gate",
     "Documentation & breaking changes",
     "Rollback & risk",
+    "Quality gate",
 ]
 # Named indices for readability from main.py. Scope & traceability is the SECOND
-# step — right after the internal pipeline passes — so the Jira story is checked
-# against the change up front, with the tasks/tests shown below it. (Fetching the
-# MR changes happens as part of this step, not a separate line.)
+# step (right after the internal pipeline). The Quality gate — the final verdict —
+# is LAST, after the advisory docs/risk agents. (Fetching the MR changes happens
+# as part of the scope step, not a separate line.)
 STEP_FETCH = 1
 STEP_SCOPE = 1
 STEP_ANALYSE = 2
@@ -38,9 +38,9 @@ STEP_GHERKIN = 3
 STEP_PLAYWRIGHT = 4
 STEP_EXECUTE = 5
 STEP_SONAR = 6
-STEP_GATE = 7
-STEP_DOC = 8
-STEP_RISK = 9
+STEP_DOC = 7
+STEP_RISK = 8
+STEP_GATE = 9
 STEP_DONE = len(STEPS)
 
 
@@ -235,7 +235,13 @@ class CommentBuilder:
     @staticmethod
     def quality_gate(result: GateResult) -> str:
         heading = "---\n\n### 🚦 Gate Verdict"
-        verdict = "✅ **PASSED**" if result.passed else "❌ **FAILED**"
+        if result.passed:
+            verdict = "✅ **PASSED** — this merge request meets all Quality Gate rules. Cleared for review."
+        else:
+            verdict = (
+                "❌ **FAILED** — this merge request doesn't satisfy the Quality Gate rules. "
+                "Resolve the ❌ items below, then re-run before merging."
+            )
         rows = [
             f"| {'✅' if c.passed else '❌'} | {c.name} | {c.detail} |"
             for c in result.checks
@@ -293,8 +299,8 @@ class CommentBuilder:
             if updated:
                 return f"| ✅ | {label} | updated |"
             if exists:
-                return f"| ⚠️ | {label} | none |"
-            return f"| ⚪ | {label} | n/a (not in project) |"
+                return f"| ⚠️ | {label} | None |"
+            return f"| ⚪ | {label} | N/A |"
 
         rows = [
             _row("Changelog changed", result.changelog_updated, result.changelog_exists),

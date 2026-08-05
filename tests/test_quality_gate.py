@@ -10,7 +10,7 @@ def _exec(passed=0, failed=0, skipped=0) -> ExecutionSummary:
 
 def test_gate_passes_when_all_clean():
     gate = QualityGate()
-    result = gate.evaluate(GuardianResult(), _exec(passed=10))
+    result = gate.evaluate(GuardianResult(), _exec(passed=10), sonar_status="OK")
     assert result.passed
     assert result.reasons == []
 
@@ -42,7 +42,7 @@ def test_gate_fails_when_red_line_exceeds_10pct():
 def test_red_line_exactly_10pct_passes():
     # 1 high out of 10 = 10%, not > 10%.
     findings = {"frontend": [{"severity": "high"}] + [{"severity": "low"}] * 9}
-    result = QualityGate().evaluate(GuardianResult(findings=findings), _exec(passed=10))
+    result = QualityGate().evaluate(GuardianResult(findings=findings), _exec(passed=10), sonar_status="OK")
     assert result.passed
 
 
@@ -55,7 +55,7 @@ def test_gate_fails_when_test_failures_exceed_10pct():
 
 def test_test_failures_exactly_10pct_passes():
     # 1 failed out of 10 = 10%, not > 10%.
-    result = QualityGate().evaluate(GuardianResult(), _exec(passed=9, failed=1))
+    result = QualityGate().evaluate(GuardianResult(), _exec(passed=9, failed=1), sonar_status="OK")
     assert result.passed
 
 
@@ -69,7 +69,7 @@ def test_internal_pipeline_failure_fails_gate():
 
 def test_no_tests_executed_does_not_fail_on_test_ratio():
     # 0 executed -> 0% failure; gate not failed by the test-ratio check alone.
-    result = QualityGate().evaluate(GuardianResult(), _exec())
+    result = QualityGate().evaluate(GuardianResult(), _exec(), sonar_status="OK")
     assert result.passed
 
 
@@ -84,8 +84,8 @@ def test_sonarqube_ok_passes():
     assert result.passed
 
 
-def test_sonarqube_not_analysed_is_advisory():
-    # No status (server not configured / no analysis) must never block on its own.
+def test_sonarqube_not_analysed_fails():
+    # SonarQube is a REQUIRED check — no analysis (N/A) fails the gate.
     result = QualityGate().evaluate(GuardianResult(), _exec(passed=10), sonar_status=None)
-    assert result.passed
-    assert result.reasons == []
+    assert not result.passed
+    assert any("SonarQube" in r for r in result.reasons)

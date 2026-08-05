@@ -4,7 +4,7 @@ Mocks GitLab, the Claude-backed generators/analysers, and the test executor,
 then drives `process_mr` and asserts that each stage lands in the live comment
 and that the commit status transitions running -> success.
 """
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -14,6 +14,17 @@ from app.test_executor import ExecutionSummary, TestResult
 from app.scope_matcher import ScopeResult
 from app.doc_reviewer import DocResult
 from app.risk_assessor import RiskResult
+from app.sonarqube_client import SonarQubeResult
+
+
+def _sonar_ok():
+    """A SonarQubeClient mock whose gate is OK (SonarQube is a required check)."""
+    client = AsyncMock()
+    client.project_key = MagicMock(return_value="org_proj")
+    client.analyse.return_value = SonarQubeResult(configured=True, status="OK")
+    client.ensure_project.return_value = True
+    client.delete_project.return_value = True
+    return client
 
 
 def _advisory_agents():
@@ -132,6 +143,7 @@ async def test_process_mr_full_flow_populates_comment():
          patch.object(main, "CodeAnalyzer", return_value=analyzer), \
          patch.object(main, "CodeGuardian", return_value=guardian), \
          patch.object(main, "TestExecutor", return_value=executor), \
+         patch.object(main, "SonarQubeClient", return_value=_sonar_ok()), \
          patch.object(main, "ScopeMatcher", return_value=scope), \
          patch.object(main, "DocReviewer", return_value=docrev), \
          patch.object(main, "RiskAssessor", return_value=risk), \

@@ -123,18 +123,15 @@ class QualityGate:
             else f"{execution.failed}/{executed} failed ({fail_ratio:.0%})",
         ))
 
-        # 5. SonarQube quality gate — hard-blocks only on a definitive ERROR.
-        # "OK" passes; anything else (not analysed / server unavailable) is
-        # advisory and never blocks, so infra flakiness can't fail every MR.
+        # 5. SonarQube quality gate — required. "OK" passes; a definitive ERROR
+        # fails; anything else (not analysed / unavailable) is N/A and also FAILS
+        # (SonarQube is a required check — no analysis means the gate isn't met).
         if sonar_status == "OK":
             checks.append(GateCheck("SonarQube quality gate", True, "passed"))
         elif sonar_status == "ERROR":
             checks.append(GateCheck("SonarQube quality gate", False, "failed on SonarQube"))
         else:
-            checks.append(GateCheck(
-                "SonarQube quality gate", True,
-                "not analysed" if sonar_status is None else f"status '{sonar_status}'",
-            ))
+            checks.append(GateCheck("SonarQube quality gate", False, "N/A"))
 
         passed = all(c.passed for c in checks)
         return GateResult(passed=passed, checks=checks)

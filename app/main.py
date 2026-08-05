@@ -664,16 +664,15 @@ async def _process_mr(
             deleted = await sonarqube.delete_project(sonar_key)
             logger.info(f"[MR !{mr_iid}] Ephemeral SonarCloud project delete: {deleted}")
 
-        # ── 10. Quality gate — the final security/policy boundary ─────────
-        await _update(CommentBuilder.progress(STEP_GATE, sections))
+        # ── 10. Quality gate — computed here (needs sonar/guardian/execution),
+        # but its section is rendered LAST, after the advisory agents below.
         gate = QualityGate().evaluate(guardian_report, execution, sonar_status=sonar.status)
-        sections.append(CommentBuilder.quality_gate(gate))
         if gate.passed:
             logger.info(f"[MR !{mr_iid}] Quality gate PASSED.")
         else:
             logger.warning(f"[MR !{mr_iid}] Quality gate FAILED: {gate.summary}")
 
-        # ── 11. Advisory agents (shown at the end): docs, risk ────────────
+        # ── 11. Advisory agents: docs, risk ───────────────────────────────
         # (Scope & traceability already ran early, right after the internal pipeline.)
         await _update(CommentBuilder.progress(STEP_DOC, sections))
         logger.info(f"[MR !{mr_iid}] Running docs / risk agents...")
@@ -691,6 +690,10 @@ async def _process_mr(
         )
         sections.append(CommentBuilder.documentation(doc_report))
         sections.append(CommentBuilder.rollback_risk(risk_report))
+
+        # Gate Verdict is the LAST step and section — the final decision.
+        await _update(CommentBuilder.progress(STEP_GATE, sections))
+        sections.append(CommentBuilder.quality_gate(gate))
 
         # ── 11. Final comment update + commit status ──────────────────────
         sections.append(CommentBuilder.review_footer())
