@@ -4,7 +4,7 @@
 The final decision agent in the pipeline. It consumes the signals produced by
 every earlier step — the internal CI pipeline, the Code Guardian review, and the
 Test Executor results — and turns them into a single pass/fail verdict that
-drives the external `quality-code` commit status.
+drives the external `quality-gate` commit status.
 
 ## Purpose
 Enforce hard security and policy boundaries. The Code Guardian is advisory and

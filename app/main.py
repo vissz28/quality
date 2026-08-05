@@ -60,9 +60,9 @@ _PIPELINE_PENDING = {"created", "pending", "running", "preparing", "waiting_for_
 
 def internal_pipeline_status(statuses: list[dict], exclude_name: str = STATUS_NAME) -> str:
     """Judge the internal CI from its individual jobs, IGNORING our own external
-    `quality-code` status.
+    `quality-gate` status.
 
-    GitLab attaches our pending `quality-code` status to the commit's pipeline, so
+    GitLab attaches our pending `quality-gate` status to the commit's pipeline, so
     the aggregate pipeline status reads 'running' as long as our check is pending —
     which would defer generation forever. Looking at the real jobs (minus ours)
     breaks that deadlock.
@@ -214,7 +214,7 @@ async def _mark_pending(project_id: int, commit_sha: str, branch: str = "", mr_i
         return
 
     # Fast-path: the internal CI may have already finished before this webhook
-    # arrived. Judge by the real jobs (excluding our own quality-code status), not
+    # arrived. Judge by the real jobs (excluding our own quality-gate status), not
     # the aggregate pipeline status — our pending check would keep that 'running'.
     try:
         statuses = await gitlab.get_commit_statuses(project_id, commit_sha)
@@ -327,7 +327,7 @@ async def _generate_from_pipeline(
         # We only reach here on a pipeline *success* (watcher / pipeline-success
         # webhook / immediate check all gate on success), so the internal
         # pipeline has already finished — start generation directly. Re-checking
-        # the pipeline here is unsafe: our own pending "quality-code" status can
+        # the pipeline here is unsafe: our own pending "quality-gate" status can
         # make the MR-pipelines query read in-progress and defer forever.
         logger.info(f"[MR !{mr_iid}] Internal pipeline finished — starting generation.")
         mr = await gitlab.get_mr_details(project_id, mr_iid)
@@ -593,7 +593,7 @@ async def _process_mr(
         # ── 9. SonarQube — read the project's quality gate from the server ─
         await _update(CommentBuilder.progress(STEP_SONAR, sections))
         logger.info(f"[MR !{mr_iid}] Fetching SonarQube analysis...")
-        sonar = await sonarqube.analyse(_project_path_from_url(project_web_url), source_branch)
+        sonar = await sonarqube.analyse(_project_path_from_url(project_web_url), source_branch, pull_request=mr_iid)
         sections.append(CommentBuilder.sonarqube(sonar))
         if sonar.error:
             logger.warning(f"[MR !{mr_iid}] SonarQube unavailable: {sonar.error}")
@@ -652,7 +652,7 @@ async def _process_mr(
     except Exception as e:
         logger.exception(f"[MR !{mr_iid}] ❌ Failed: {e}")
         await _set_status("failed", f"Test generation failed: {str(e)[:100]}")
-        error_body = f"❌ **Quality Code** failed.\n\n```\n{str(e)}\n```"
+        error_body = f"❌ **Quality Gate** failed.\n\n```\n{str(e)}\n```"
         try:
             if note_id:
                 await gitlab.edit_mr_comment(project_id, mr_iid, note_id, error_body)

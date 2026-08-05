@@ -4,7 +4,7 @@ import httpx
 
 # Name of the external commit status our bot posts. Shows up in the MR as its
 # own pipeline/check, separate from the project's internal CI pipeline.
-STATUS_NAME = os.environ.get("STATUS_NAME", "quality-code")
+STATUS_NAME = os.environ.get("STATUS_NAME", "quality-gate")
 
 
 class GitLabClient:
@@ -120,7 +120,7 @@ class GitLabClient:
     async def get_commit_statuses(self, project_id: int, sha: str) -> list[dict]:
         """Return every status/CI job for a commit (each with name, status,
         allow_failure). Used to judge the internal pipeline by its own jobs while
-        ignoring our external 'quality-code' status — see internal_pipeline_status."""
+        ignoring our external 'quality-gate' status — see internal_pipeline_status."""
         url = f"{self.base}/projects/{project_id}/repository/commits/{sha}/statuses"
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(url, headers=self.headers, params={"per_page": 100})

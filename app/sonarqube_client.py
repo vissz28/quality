@@ -74,11 +74,18 @@ class SonarQubeClient:
             url += f"&branch={branch}"
         return url
 
-    async def analyse(self, project_path: str | None, branch: str = "") -> SonarQubeResult:
+    async def analyse(
+        self, project_path: str | None, branch: str = "", pull_request: str | int | None = None
+    ) -> SonarQubeResult:
         """Fetch the quality gate status and headline measures for a project.
 
-        Returns an unconfigured result when the server is not set up, and a
-        result with `error` set (status None) when a configured server can't be
+        SonarCloud/SonarQube store an MR analysis under `pullRequest=<iid>` and a
+        branch analysis under `branch=<name>`. We try, in order of specificity,
+        pullRequest → branch → default (main), and use the first scope that has an
+        analysis — so we find the result however the pipeline produced it.
+
+        Returns an unconfigured result when the server is not set up, and a result
+        with `error` set (status None) when nothing is found or the server can't be
         reached — neither blocks the gate; only a definitive ERROR does.
         """
         if not self.configured:
@@ -88,34 +95,43 @@ class SonarQubeClient:
         if not project_key:
             return SonarQubeResult(configured=True, error="No SonarQube project key resolved")
 
+        # Scopes to try, most specific first. `{}` = the project's default branch.
+        scopes: list[dict[str, str]] = []
+        if pull_request:
+            scopes.append({"pullRequest": str(pull_request)})
+        if branch:
+            scopes.append({"branch": branch})
+        scopes.append({})
+
         result = SonarQubeResult(
             configured=True,
             dashboard_url=self._dashboard_url(project_key, branch),
         )
         try:
             async with httpx.AsyncClient(timeout=15, auth=self._auth) as client:
-                status_params = {"projectKey": project_key}
-                if branch:
-                    status_params["branch"] = branch
-                r = await client.get(
-                    f"{self.base}/api/qualitygates/project_status",
-                    params=status_params,
-                )
-                r.raise_for_status()
-                project_status = r.json().get("projectStatus", {})
-                result.status = project_status.get("status")
-                result.conditions = project_status.get("conditions", [])
-
-                measure_params = {"component": project_key, "metricKeys": _METRIC_KEYS}
-                if branch:
-                    measure_params["branch"] = branch
-                mr = await client.get(
-                    f"{self.base}/api/measures/component",
-                    params=measure_params,
-                )
-                if mr.status_code == 200:
-                    measures = mr.json().get("component", {}).get("measures", [])
-                    result.measures = {m["metric"]: m.get("value", "") for m in measures}
+                for scope in scopes:
+                    r = await client.get(
+                        f"{self.base}/api/qualitygates/project_status",
+                        params={"projectKey": project_key, **scope},
+                    )
+                    if r.status_code != 200:
+                        continue  # scope not analysed — try the next
+                    project_status = r.json().get("projectStatus", {})
+                    status = project_status.get("status")
+                    if not status or status == "NONE":
+                        continue
+                    result.status = status
+                    result.conditions = project_status.get("conditions", [])
+                    mr = await client.get(
+                        f"{self.base}/api/measures/component",
+                        params={"component": project_key, "metricKeys": _METRIC_KEYS, **scope},
+                    )
+                    if mr.status_code == 200:
+                        measures = mr.json().get("component", {}).get("measures", [])
+                        result.measures = {m["metric"]: m.get("value", "") for m in measures}
+                    return result
+                # No scope had an analysis.
+                result.error = "no analysis found (pull request / branch / default)"
         except Exception as e:
             # A configured-but-unreachable server must not break every MR — record
             # the error and leave status None so the gate treats it as unavailable.

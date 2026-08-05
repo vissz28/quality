@@ -1,0 +1,52 @@
+# ── External SonarCloud scanner pipeline ─────────────────────────────────────
+# A standalone GitLab project whose ONLY job is to scan a target repo and upload
+# results to SonarCloud. Keeps the reviewed project's CI untouched and needs no
+# scanner in the quality bot. Trigger it (per MR) via GitLab's pipeline trigger
+# API with the variables below; SonarCloud then has the analysis and the bot
+# reads it (pullRequest → branch → default) and posts the table.
+#
+# Set once (this runner project → Settings → CI/CD → Variables, masked):
+#   SONAR_TOKEN   SonarCloud token
+#   SONAR_ORG     SonarCloud organization key
+#   TARGET_TOKEN  a GitLab token (read_repository) that can clone the target repo
+#
+# Pass per trigger (as pipeline variables):
+#   TARGET_REPO         host/group/repo.git of the project to scan (no scheme)
+#   TARGET_REF          branch to scan (or the MR source branch)
+#   SONAR_PROJECT_KEY   the SonarCloud project key (e.g. org_repo)
+#   MR_IID              (optional) merge-request iid → scan as a PR
+#
+# Trigger example:
+#   curl -X POST \
+#     -F token=$TRIGGER_TOKEN \
+#     -F ref=main \
+#     -F "variables[TARGET_REPO]=gitlab.com/group/app.git" \
+#     -F "variables[TARGET_REF]=$SOURCE_BRANCH" \
+#     -F "variables[SONAR_PROJECT_KEY]=org_app" \
+#     -F "variables[MR_IID]=$MR_IID" \
+#     https://gitlab.com/api/v4/projects/<runner_project_id>/trigger/pipeline
+
+stages:
+  - scan
+
+sonar-scan:
+  stage: scan
+  image: sonarsource/sonar-scanner-cli:latest
+  variables:
+    GIT_STRATEGY: none          # we clone the TARGET repo ourselves, not this one
+    GIT_DEPTH: "0"
+  script:
+    - git clone --depth=50 --branch "$TARGET_REF" "https://oauth2:${TARGET_TOKEN}@${TARGET_REPO}" target
+    - cd target
+    - |
+      SCOPE="-Dsonar.branch.name=$TARGET_REF"
+      if [ -n "$MR_IID" ]; then SCOPE="-Dsonar.pullrequest.key=$MR_IID -Dsonar.pullrequest.branch=$TARGET_REF"; fi
+    - sonar-scanner
+        -Dsonar.host.url=https://sonarcloud.io
+        -Dsonar.organization=$SONAR_ORG
+        -Dsonar.projectKey=$SONAR_PROJECT_KEY
+        -Dsonar.token=$SONAR_TOKEN
+        $SCOPE
+        -Dsonar.qualitygate.wait=true
+  rules:
+    - if: $TARGET_REPO   # only run when triggered with a target

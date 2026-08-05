@@ -16,7 +16,7 @@
 
 ## 3. Verdict & Enforcement
 - Passes only when all boundaries pass (fail-closed)
-- Sets the external `quality-code` commit status: `success` or `failed`
+- Sets the external `quality-gate` commit status: `success` or `failed`
 - Fails the pipeline so a risky MR cannot merge behind a green check
 
 ## 4. Transparency

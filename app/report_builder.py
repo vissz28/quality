@@ -476,7 +476,7 @@ class ReportBuilder:
       {analysis_tab_html}
 
       <footer class="footer">
-        Quality Code · MR !{mr_iid} · {now}
+        Quality Gate · MR !{mr_iid} · {now}
       </footer>
     </main>
 

@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from .doc_reviewer import DocResult
     from .risk_assessor import RiskResult
 
-_HEADER = "## 🤖 Quality Code"
+_HEADER = "## 🤖 Quality Gate"
 
 # Ordered pipeline of work shown as a live checklist in the MR comment. Step 0
 # (the project's internal CI) is what we wait on — the rest starts once it finishes,
@@ -232,7 +232,7 @@ class CommentBuilder:
 
     @staticmethod
     def quality_gate(result: GateResult) -> str:
-        heading = "---\n\n### 🚦 Quality Gate"
+        heading = "---\n\n### 🚦 Gate Verdict"
         verdict = "✅ **PASSED**" if result.passed else "❌ **FAILED**"
         rows = [
             f"| {'✅' if c.passed else '❌'} | {c.name} | {c.detail} |"

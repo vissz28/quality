@@ -195,7 +195,7 @@ async def test_process_mr_full_flow_populates_comment():
     assert "✅ Passed" in final
 
     # Quality gate passed (all tests green, clean guardian) -> status success.
-    assert "🚦 Quality Gate" in final
+    assert "🚦 Gate Verdict" in final
     assert "PASSED" in final
     states = [state for state, _ in status_calls]
     assert states[0] == "running"
@@ -299,7 +299,7 @@ async def test_process_mr_quality_gate_fails_on_security_finding():
         )
 
     final = comment_bodies[-1]
-    assert "🚦 Quality Gate" in final
+    assert "🚦 Gate Verdict" in final
     assert "FAILED" in final
     # Despite the failure, the full comment is still posted (fails loudly).
     assert "Test Execution Results" in final
