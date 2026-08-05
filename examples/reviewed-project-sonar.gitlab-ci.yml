@@ -1,0 +1,51 @@
+# ── SonarCloud scan INSIDE the reviewed GitLab project's own CI ───────────────
+# Paste this into the reviewed project's `.gitlab-ci.yml` (the repo with the
+# webhook, e.g. analytics-charting-package). The project scans ITSELF on each MR
+# on your GitLab runners (their RAM — nothing on the bot / Render), uploads to
+# SonarCloud, and the bot only READS the result into the comment + gate.
+#
+# SonarCloud can't auto-scan GitLab, so this job runs the scanner. It uses the
+# sonar-scanner-cli Docker image, which runs on your shared (untagged) runners.
+#
+# Set once on THIS project (Settings → CI/CD → Variables, masked):
+#   SONAR_TOKEN   SonarCloud token (upload)
+#   SONAR_ORG     SonarCloud organization key (e.g. vissz28)
+# The project key is derived as <SONAR_ORG>_<repo> to match what the bot reads;
+# override with SONAR_PROJECT_KEY if your key differs.
+#
+# On the BOT: leave SONAR_INBOT_SCAN off and SONAR_SCAN_PROJECT_ID /
+# SONAR_SCAN_TRIGGER_TOKEN unset — the bot only reads.
+
+stages:
+  - sonar
+
+sonarcloud:
+  stage: sonar
+  image: sonarsource/sonar-scanner-cli:latest
+  # A red gate must NOT fail the pipeline (that would block the bot which waits
+  # for the internal pipeline). The bot reflects the ERROR status instead.
+  allow_failure: true
+  variables:
+    GIT_DEPTH: "0"                               # full history for accurate new-code
+    SONAR_SCANNER_JAVA_OPTS: "-Xmx2048m"         # raise if the runner has RAM
+  script:
+    - export KEY="${SONAR_PROJECT_KEY:-${SONAR_ORG}_${CI_PROJECT_NAME}}"
+    - |
+      if [ -n "$CI_MERGE_REQUEST_IID" ]; then
+        SCOPE="-Dsonar.pullrequest.key=$CI_MERGE_REQUEST_IID -Dsonar.pullrequest.branch=$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME -Dsonar.pullrequest.base=$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+      else
+        SCOPE="-Dsonar.branch.name=$CI_COMMIT_REF_NAME"
+      fi
+    - >
+      sonar-scanner
+      -Dsonar.host.url=https://sonarcloud.io
+      -Dsonar.organization=$SONAR_ORG
+      -Dsonar.projectKey=$KEY
+      -Dsonar.token=$SONAR_TOKEN
+      -Dsonar.sources=.
+      -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**,**/.next/**,**/coverage/**,**/vendor/**,**/*.min.js,**/*.map
+      $SCOPE
+      -Dsonar.qualitygate.wait=true
+  rules:
+    - if: $CI_MERGE_REQUEST_IID   # run on every MR (produces PR analysis)
+    - if: $CI_COMMIT_BRANCH == "dev"   # and the default branch (baseline)
