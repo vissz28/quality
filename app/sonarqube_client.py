@@ -24,8 +24,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Metrics we pull for the MR comment. Kept small and human-meaningful.
-_METRIC_KEYS = "bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,sqale_rating,security_rating,reliability_rating"
+# Metrics we pull for the MR comment. Kept human-meaningful.
+_METRIC_KEYS = (
+    "bugs,vulnerabilities,code_smells,security_hotspots,"
+    "coverage,duplicated_lines_density,ncloc,sqale_index,"
+    "sqale_rating,security_rating,reliability_rating"
+)
 
 
 @dataclass
@@ -35,6 +39,7 @@ class SonarQubeResult:
     status: str | None = None          # "OK" | "ERROR" | "NONE" | None (unavailable)
     measures: dict[str, str] = field(default_factory=dict)
     conditions: list[dict] = field(default_factory=list)
+    issues: list[dict] = field(default_factory=list)   # actual bugs/vulns/smells
     dashboard_url: str = ""
     error: str | None = None
 
@@ -193,6 +198,21 @@ class SonarQubeClient:
                     if mr.status_code == 200:
                         measures = mr.json().get("component", {}).get("measures", [])
                         result.measures = {m["metric"]: m.get("value", "") for m in measures}
+                    # The actual open issues (bugs/vulns/smells) — worst first.
+                    iss = await client.get(
+                        f"{self.base}/api/issues/search",
+                        params={
+                            "componentKeys": project_key,
+                            "types": "BUG,VULNERABILITY,CODE_SMELL",
+                            "resolved": "false",
+                            "s": "SEVERITY",
+                            "asc": "false",
+                            "ps": 20,
+                            **scope,
+                        },
+                    )
+                    if iss.status_code == 200:
+                        result.issues = iss.json().get("issues", [])
                     return result
                 # No scope had an analysis.
                 result.error = "no analysis found (pull request / branch / default)"

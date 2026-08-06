@@ -164,22 +164,43 @@ class CommentBuilder:
         "code_smells": "👃 Code smells",
         "security_hotspots": "🛡️ Security hotspots",
         "violations": "⚠️ Issues",
+        "ncloc": "📏 Lines of code",
+        "sqale_index": "🕒 Technical debt",
+    }
+    # Colour per rating letter for the Rating column.
+    _SONAR_RATING_ICON = {"A": "🟢", "B": "🟢", "C": "🟡", "D": "🟠", "E": "🔴"}
+    # A count metric and the rating that qualifies it (shown on the same row).
+    _SONAR_MEASURE_RATING = {
+        "bugs": "reliability_rating",
+        "vulnerabilities": "security_rating",
+        "code_smells": "sqale_rating",
     }
     # Headline measures shown when the gate reports no per-condition breakdown.
+    # (The standalone *_rating metrics are folded into the rows above, not listed.)
     _SONAR_MEASURE_ORDER = [
-        "bugs", "vulnerabilities", "code_smells", "security_hotspots",
-        "coverage", "duplicated_lines_density",
-        "reliability_rating", "security_rating", "sqale_rating",
+        "bugs", "vulnerabilities", "security_hotspots", "code_smells",
+        "sqale_index", "coverage", "duplicated_lines_density", "ncloc",
     ]
 
     @staticmethod
     def _sonar_measure_rows(measures: dict) -> list[str]:
-        """Metric · Value rows for the headline measures the server reported."""
+        """Metric · Value · Rating rows for the headline measures.
+
+        Each count metric shows its qualifying rating (bugs→reliability,
+        vulnerabilities→security, code smells→maintainability); others show "—".
+        """
         rows = []
         for m in CommentBuilder._SONAR_MEASURE_ORDER:
-            if m in measures:
-                label = CommentBuilder._SONAR_METRIC_LABELS.get(m, m)
-                rows.append(f"| {label} | {CommentBuilder._sonar_value(m, measures[m])} |")
+            if m not in measures:
+                continue
+            label = CommentBuilder._SONAR_METRIC_LABELS.get(m, m)
+            value = CommentBuilder._sonar_value(m, measures[m])
+            rating = "—"
+            rk = CommentBuilder._SONAR_MEASURE_RATING.get(m)
+            if rk and measures.get(rk):
+                letter = CommentBuilder._sonar_value(rk, measures[rk])
+                rating = f"{CommentBuilder._SONAR_RATING_ICON.get(letter, '')} {letter}".strip()
+            rows.append(f"| {label} | {value} | {rating} |")
         return rows
 
     @staticmethod
@@ -192,6 +213,18 @@ class CommentBuilder:
                 return CommentBuilder._SONAR_RATING.get(f"{float(value):.1f}", str(value))
             except (TypeError, ValueError):
                 return str(value)
+        if metric == "sqale_index":  # technical debt in minutes -> human effort
+            try:
+                mins = int(float(value))
+            except (TypeError, ValueError):
+                return str(value)
+            if mins < 60:
+                return f"{mins}min"
+            hours, rem = divmod(mins, 60)
+            if hours < 8:
+                return f"{hours}h {rem}min" if rem else f"{hours}h"
+            days, rh = divmod(hours, 8)  # SonarQube uses an 8h workday
+            return f"{days}d {rh}h" if rh else f"{days}d"
         if metric.endswith("coverage") or "duplicated_lines_density" in metric or "hotspots_reviewed" in metric:
             try:
                 return f"{float(value):g}%"
@@ -218,6 +251,30 @@ class CommentBuilder:
                 required = f"{comp} {CommentBuilder._sonar_value(metric, c.get('errorThreshold'))}".strip()
             rows.append(f"| {icon} | {label} | {required} | {actual} |")
         return rows
+
+    _SONAR_SEVERITY_ICON = {"BLOCKER": "🔴", "CRITICAL": "🟠", "MAJOR": "🟡", "MINOR": "🔵", "INFO": "⚪"}
+    _SONAR_ISSUE_TYPE = {"BUG": "🐞 Bug", "VULNERABILITY": "🔓 Vulnerability", "CODE_SMELL": "👃 Code smell"}
+
+    @staticmethod
+    def _sonar_issues(issues: list[dict]) -> str:
+        """Collapsible list of the actual issues — severity · type · location · message."""
+        if not issues:
+            return ""
+        rows = []
+        for i in issues[:20]:
+            sev = i.get("severity", "")
+            sicon = CommentBuilder._SONAR_SEVERITY_ICON.get(sev, "")
+            typ = CommentBuilder._SONAR_ISSUE_TYPE.get(i.get("type", ""), i.get("type", ""))
+            comp = i.get("component", "")
+            path = comp.split(":", 1)[1] if ":" in comp else comp
+            line = i.get("line")
+            loc = f"`{path}:{line}`" if line else f"`{path}`"
+            rows.append(f"| {sicon} {sev.title()} | {typ} | {loc} | {_cell(i.get('message', ''))} |")
+        table = (
+            "| Severity | Type | Location | Message |\n"
+            "|----------|------|----------|---------|\n" + "\n".join(rows)
+        )
+        return _details(f"🔎 <strong>Issues</strong> ({len(issues)} shown)", table)
 
     @staticmethod
     def sonarqube(result: SonarQubeResult) -> str:
@@ -249,11 +306,15 @@ class CommentBuilder:
             # measures inline instead of a link out.
             mrows = CommentBuilder._sonar_measure_rows(result.measures)
             if mrows:
-                table = "| Metric | Value |\n|--------|-------|\n" + "\n".join(mrows)
+                table = "| Metric | Value | Rating |\n|--------|-------|--------|\n" + "\n".join(mrows)
             else:
                 table = "_Gate passed._" if result.status == "OK" else "_Gate failed._"
 
-        return f"{heading}\n\n> {verdict}\n\n{table}\n"
+        body = f"{heading}\n\n> {verdict}\n\n{table}\n"
+        issues = CommentBuilder._sonar_issues(result.issues)
+        if issues:
+            body += f"\n{issues}\n"
+        return body
 
     @staticmethod
     def quality_gate(result: GateResult) -> str:
