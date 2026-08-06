@@ -191,10 +191,9 @@ class CommentBuilder:
         """
         rows = []
         for m in CommentBuilder._SONAR_MEASURE_ORDER:
-            if m not in measures:
-                continue
+            # Always render every metric row (a "full" table); show — when absent.
             label = CommentBuilder._SONAR_METRIC_LABELS.get(m, m)
-            value = CommentBuilder._sonar_value(m, measures[m])
+            value = CommentBuilder._sonar_value(m, measures[m]) if m in measures else "—"
             note = "—"
             rk = CommentBuilder._SONAR_MEASURE_RATING.get(m)
             if rk and measures.get(rk):
@@ -317,9 +316,8 @@ class CommentBuilder:
                 table = "_Gate passed._" if result.status == "OK" else "_Gate failed._"
 
         body = f"{heading}\n\n> {verdict}\n\n{table}\n"
-        issues = CommentBuilder._sonar_issues(result.issues)
-        if issues:
-            body += f"\n{issues}\n"
+        if result.dashboard_url:
+            body += f"\n🔗 [View full report in SonarQube]({result.dashboard_url})\n"
         return body
 
     @staticmethod
