@@ -254,33 +254,6 @@ class CommentBuilder:
             rows.append(f"| {icon} | {label} | {required} | {actual} |")
         return rows
 
-    _SONAR_SEVERITY_ICON = {"BLOCKER": "🔴", "CRITICAL": "🟠", "MAJOR": "🟡", "MINOR": "🔵", "INFO": "⚪"}
-    _SONAR_ISSUE_TYPE = {"BUG": "🐞 Bug", "VULNERABILITY": "🔓 Vulnerability", "CODE_SMELL": "👃 Code smell"}
-
-    @staticmethod
-    def _sonar_issues(issues: list[dict]) -> str:
-        """Collapsible list of the actual issues — severity · type · location · message."""
-        if not issues:
-            return ""
-        rows = []
-        for i in issues[:20]:
-            sev = i.get("severity", "")
-            sicon = CommentBuilder._SONAR_SEVERITY_ICON.get(sev, "")
-            typ = CommentBuilder._SONAR_ISSUE_TYPE.get(i.get("type", ""), i.get("type", ""))
-            comp = i.get("component", "")
-            path = comp.split(":", 1)[1] if ":" in comp else comp
-            line = i.get("line")
-            loc = f"`{path}:{line}`" if line else f"`{path}`"
-            effort = i.get("effort") or i.get("debt") or "—"
-            rows.append(
-                f"| {sicon} {sev.title()} | {typ} | {loc} | {effort} | {_cell(i.get('message', ''))} |"
-            )
-        table = (
-            "| Severity | Type | Location | Effort | Message |\n"
-            "|----------|------|----------|--------|---------|\n" + "\n".join(rows)
-        )
-        return _details(f"🔎 <strong>Issues</strong> ({len(issues)} shown)", table)
-
     @staticmethod
     def sonarqube(result: SonarQubeResult) -> str:
         """Render the SonarQube gate as a Metric · Required · Actual · Status table.
