@@ -11,3 +11,12 @@ runner/playwright-report/
 runner/test-results/
 .npmrc
 .claude/
+
+# Local scanner secrets (SONAR_TOKEN / TARGET_TOKEN)
+examples/sonar-scanner/sonarqube.env
+examples/sonar-scanner/certs/*.crt
+
+# Local tunnel + scanner work dirs
+/ngrok
+/ngrok.zip
+/.sonar/
