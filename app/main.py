@@ -8,7 +8,6 @@ from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 
 from .code_analyzer import CodeAnalyzer
-from .code_guardian import CodeGuardian
 from .comment_builder import (
     CommentBuilder,
     STEP_ANALYSE,
@@ -486,7 +485,6 @@ async def _process_mr(
     gitlab = GitLabClient()
     generator = TestGenerator()
     analyzer = CodeAnalyzer()
-    guardian = CodeGuardian()
     executor = TestExecutor()
     sonarqube = SonarQubeClient()
     scope_matcher = ScopeMatcher()
@@ -575,20 +573,14 @@ async def _process_mr(
         # ── 4. Fetch example tests ─────────────────────────────────────────
         example_tests = await gitlab.get_example_tests(project_id, target_branch)
 
-        # ── 5. Software Engineer + Code Guardian (parallel) ───────────────
-        logger.info(f"[MR !{mr_iid}] Running software-engineer + code-guardian in parallel...")
-        code_analysis, guardian_report = await asyncio.gather(
-            analyzer.analyze(mr_title, mr_description, diff_text, file_contents),
-            guardian.review(mr_title, diff_text, file_contents),
-        )
+        # ── 5. Software Engineer (code analysis) ──────────────────────────
+        # (Code Guardian removed from the flow — SonarQube covers security.)
+        logger.info(f"[MR !{mr_iid}] Running software-engineer code analysis...")
+        code_analysis = await analyzer.analyze(mr_title, mr_description, diff_text, file_contents)
         if code_analysis:
             sections.append(CommentBuilder.code_analysis(code_analysis))
         else:
             logger.warning(f"[MR !{mr_iid}] Code analysis failed — proceeding without it.")
-        if guardian_report.markdown:
-            sections.append(guardian_report.markdown)
-        else:
-            logger.warning(f"[MR !{mr_iid}] Code Guardian returned no findings.")
         await _update(CommentBuilder.progress(STEP_GHERKIN, sections))
 
         # ── 6. Generate Gherkin ────────────────────────────────────────────
@@ -664,10 +656,10 @@ async def _process_mr(
             deleted = await sonarqube.delete_project(sonar_key)
             logger.info(f"[MR !{mr_iid}] Ephemeral SonarCloud project delete: {deleted}")
 
-        # ── 10. Quality gate — computed here (needs sonar/guardian/execution),
-        # but its section is rendered LAST, after the advisory agents below.
+        # ── 10. Quality gate — computed here (needs sonar/execution), but its
+        # section is rendered LAST, after the advisory agents below.
         gate = QualityGate().evaluate(
-            guardian_report, execution,
+            execution,
             sonar_status=sonar.status,
             jira_story_linked=bool(story),
         )

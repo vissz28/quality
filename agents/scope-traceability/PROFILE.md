@@ -18,11 +18,11 @@ step of a PR quality review.
 GitLab Webhook
       │
       ▼
-┌──────────────────┐  ┌────────────────┐  ┌────────────────┐
-│ Software Engineer │  │ Code Guardian  │  │ Scope Matcher  │  ← run in parallel
-└─────────┬─────────┘  └───────┬────────┘  └───────┬────────┘
-          │                    │                   │
-          └──────────┬─────────┴───────────────────┘
+┌──────────────────┐  ┌────────────────┐
+│ Software Engineer │  │ Scope Matcher  │  ← run in parallel
+└─────────┬─────────┘  └───────┬────────┘
+          │                    │
+          └──────────┬─────────┘
                      ▼
               Test Calibrator → Test Executor → SonarQube → Quality Gate
 ```
@@ -45,4 +45,4 @@ Rendered as a **Scope Match** section and an advisory **Quality Gate** row.
 - **Advisory — never blocks the MR.** No Jira config, no ticket key, no README, or
   any API/parse error → `available=False` → "not evaluated", gate unaffected.
 - Reads only; never modifies code or the ticket.
-- Runs in parallel with the Software Engineer and Code Guardian — adds no latency.
+- Runs in parallel with the Software Engineer — adds no latency.

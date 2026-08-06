@@ -7,19 +7,20 @@ fails the whole gate and sets the commit status to `failed`.
 **Why:** A security or policy boundary is not a majority vote. One high-severity
 security hole is enough to block a merge.
 
-## R2 — Security is a hard boundary
-Any high-severity finding in the `security` or `security_rules` categories fails
-the gate outright, regardless of how few findings there are in total.
+## R2 — Traceability is required
+The MR must have a linked Jira story. No linked story fails the gate outright.
+(Security is now covered by SonarQube — the Code Guardian checks were removed
+from the flow.)
 
-## R3 — The 10% red line
-If more than 10% of all Code Guardian findings are high severity, the gate
-fails. This catches a diff that is broadly risky even when no single security
-finding trips R2.
-
-## R4 — The 10% test-failure line
+## R3 — The 10% test-failure line
 If more than 10% of executed tests failed, the gate fails. Skipped tests count
 toward the executed total; an execution error (0 tests run) does not by itself
-fail the gate — R2/R3 still apply.
+fail the gate — R2 still applies.
+
+## R4 — SonarQube is a required check
+The gate passes only when the project's SonarQube quality gate reports `OK`. A
+definitive `ERROR` fails it, and so does a missing or unavailable analysis —
+SonarQube is required, not advisory.
 
 ## R5 — Internal pipeline must have passed
 The gate never runs before the project's internal pipeline has finished, and a
@@ -36,5 +37,5 @@ The gate is pure arithmetic over the collected signals. It adds no latency and
 its decision is reproducible from the same inputs.
 
 ## R8 — Thresholds live in one place
-`RED_LINE_THRESHOLD` and `TEST_FAILURE_THRESHOLD` in `app/quality_gate.py` are
-the single source of truth. Tune the policy there, not in scattered conditionals.
+`TEST_FAILURE_THRESHOLD` in `app/quality_gate.py` is the single source of
+truth. Tune the policy there, not in scattered conditionals.

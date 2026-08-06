@@ -18,7 +18,7 @@ _HEADER = "## Quality Gate"
 STEPS = [
     "Internal pipeline",
     "Scope & traceability",
-    "Analysing code & security review",
+    "Analysing code",
     "Generating Gherkin scenarios",
     "Generating Playwright tests",
     "Executing tests",

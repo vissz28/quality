@@ -3,7 +3,7 @@
 - **Advisory only.** Never fail or block an MR. Missing Jira config, no ticket key,
   no README, or any API/parse error → `available=False` → "not evaluated".
 - **Scope & intent only.** Do not judge code quality, security, or style — those
-  belong to Code Guardian and the Software Engineer.
+  belong to SonarQube and the Software Engineer.
 - **Evidence-based.** Every mismatch must point to a concrete story requirement or
   a concrete unrelated change in the diff. Never invent requirements or assume
   untouched code.

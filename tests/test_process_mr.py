@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import app.main as main
-from app.code_guardian import GuardianResult
 from app.test_executor import ExecutionSummary, TestResult
 from app.scope_matcher import ScopeResult
 from app.doc_reviewer import DocResult
@@ -40,10 +39,6 @@ def _advisory_agents():
     jira.get_issue.return_value = None
     jira.project_key = None
     return scope, docrev, risk, jira
-
-
-def _clean_guardian() -> GuardianResult:
-    return GuardianResult(markdown="🛡️ **Code Guardian** — no blocking issues.", findings={})
 
 
 GHERKIN = """Feature: Number formatting
@@ -131,9 +126,6 @@ async def test_process_mr_full_flow_populates_comment():
     analyzer = AsyncMock()
     analyzer.analyze.return_value = "Change formats numbers with unit suffixes."
 
-    guardian = AsyncMock()
-    guardian.review.return_value = _clean_guardian()
-
     executor = AsyncMock()
     executor.run.return_value = _execution_summary()
 
@@ -142,7 +134,6 @@ async def test_process_mr_full_flow_populates_comment():
     with patch.object(main, "GitLabClient", return_value=gitlab), \
          patch.object(main, "TestGenerator", return_value=generator), \
          patch.object(main, "CodeAnalyzer", return_value=analyzer), \
-         patch.object(main, "CodeGuardian", return_value=guardian), \
          patch.object(main, "TestExecutor", return_value=executor), \
          patch.object(main, "SonarQubeClient", return_value=_sonar_ok()), \
          patch.object(main, "ScopeMatcher", return_value=scope), \
@@ -164,7 +155,6 @@ async def test_process_mr_full_flow_populates_comment():
 
     # Each generator/analyser/executor was invoked exactly once.
     analyzer.analyze.assert_awaited_once()
-    guardian.review.assert_awaited_once()
     generator.generate_gherkin.assert_awaited_once()
     generator.generate_playwright.assert_awaited_once()
     executor.run.assert_awaited_once()
@@ -174,7 +164,7 @@ async def test_process_mr_full_flow_populates_comment():
     all_text = "\n".join(comment_bodies)
     assert "Internal pipeline" in all_text
     assert "Scope & traceability" in all_text
-    assert "Analysing code & security review" in all_text
+    assert "Analysing code" in all_text
     assert "Generating Gherkin scenarios" in all_text
     assert "Generating Playwright tests" in all_text
     assert "Executing tests" in all_text
@@ -188,7 +178,6 @@ async def test_process_mr_full_flow_populates_comment():
     # The final comment is the last body written; it must contain every stage.
     final = comment_bodies[-1]
     assert "Code analysis" in final
-    assert "Code Guardian" in final
     assert "Gherkin scenarios" in final
     assert "Playwright tests" in final
     assert "Test Execution Results" in final
@@ -207,7 +196,7 @@ async def test_process_mr_full_flow_populates_comment():
     assert 'Zero value returns "0"' in final
     assert "✅ Passed" in final
 
-    # Quality gate passed (all tests green, clean guardian) -> status success.
+    # Quality gate passed (all tests green) -> status success.
     assert "🚦 Gate Verdict" in final
     assert "PASSED" in final
     states = [state for state, _ in status_calls]
@@ -229,8 +218,6 @@ async def test_process_mr_renders_section_even_when_execution_fails():
 
     analyzer = AsyncMock()
     analyzer.analyze.return_value = "analysis"
-    guardian = AsyncMock()
-    guardian.review.return_value = GuardianResult()
 
     executor = AsyncMock()
     failed = ExecutionSummary()
@@ -241,7 +228,6 @@ async def test_process_mr_renders_section_even_when_execution_fails():
     with patch.object(main, "GitLabClient", return_value=gitlab), \
          patch.object(main, "TestGenerator", return_value=generator), \
          patch.object(main, "CodeAnalyzer", return_value=analyzer), \
-         patch.object(main, "CodeGuardian", return_value=guardian), \
          patch.object(main, "TestExecutor", return_value=executor), \
          patch.object(main, "ScopeMatcher", return_value=scope), \
          patch.object(main, "DocReviewer", return_value=docrev), \
@@ -264,61 +250,6 @@ async def test_process_mr_renders_section_even_when_execution_fails():
     assert "Test Execution Results" in final
     assert "Execution error" in final
     assert "Node.js is not available" in final
-
-
-@pytest.mark.asyncio
-async def test_process_mr_quality_gate_fails_on_security_finding():
-    """A high-severity security finding fails the gate and the pipeline."""
-    comment_bodies: list[str] = []
-    status_calls: list[tuple[str, str]] = []
-    gitlab = _make_gitlab(comment_bodies, status_calls)
-
-    generator = AsyncMock()
-    generator.generate_gherkin.return_value = GHERKIN
-    generator.generate_playwright.return_value = PLAYWRIGHT
-    analyzer = AsyncMock()
-    analyzer.analyze.return_value = "analysis"
-
-    guardian = AsyncMock()
-    guardian.review.return_value = GuardianResult(
-        markdown="🛡️ findings",
-        findings={"security": [{"severity": "high", "issue": "hardcoded secret"}]},
-    )
-
-    executor = AsyncMock()
-    executor.run.return_value = _execution_summary()  # tests all pass
-
-    scope, docrev, risk, jira = _advisory_agents()
-    with patch.object(main, "GitLabClient", return_value=gitlab), \
-         patch.object(main, "TestGenerator", return_value=generator), \
-         patch.object(main, "CodeAnalyzer", return_value=analyzer), \
-         patch.object(main, "CodeGuardian", return_value=guardian), \
-         patch.object(main, "TestExecutor", return_value=executor), \
-         patch.object(main, "ScopeMatcher", return_value=scope), \
-         patch.object(main, "DocReviewer", return_value=docrev), \
-         patch.object(main, "RiskAssessor", return_value=risk), \
-         patch.object(main, "JiraClient", return_value=jira):
-        await main.process_mr(
-            project_id=1,
-            project_web_url="https://gitlab.example.com/group/proj",
-            mr_iid=99,
-            mr_title="t",
-            mr_description="",
-            source_branch="b",
-            target_branch="main",
-            author="a",
-            mr_url="u",
-            commit_sha="cafe123",
-        )
-
-    final = comment_bodies[-1]
-    assert "🚦 Gate Verdict" in final
-    assert "FAILED" in final
-    # Despite the failure, the full comment is still posted (fails loudly).
-    assert "Test Execution Results" in final
-    # Commit status ends failed.
-    states = [state for state, _ in status_calls]
-    assert states[-1] == "failed"
 
 
 @pytest.mark.asyncio

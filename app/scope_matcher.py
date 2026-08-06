@@ -1,10 +1,10 @@
 """Scope Matcher agent — checks whether an MR implements its Jira story and
 whether that story fits this project. Advisory only; never blocks.
 
-Mirrors the Code Guardian pattern: one module, its own Anthropic client, a system
-prompt extracted from ``agents/scope-traceability/SKILLS.md``, and a dataclass
-result. On any missing input or error it returns an unavailable result so the
-quality gate treats it as "not evaluated".
+One module, its own Anthropic client, a system prompt extracted from
+``agents/scope-traceability/SKILLS.md``, and a dataclass result. On any missing
+input or error it returns an unavailable result so the quality gate treats it
+as "not evaluated".
 """
 from __future__ import annotations
 

@@ -4,10 +4,9 @@ Turns the advisory signals from earlier steps into a pass/fail decision and,
 when a boundary is crossed, fails the pipeline. Failing conditions:
 
   1. Internal pipeline failed          (enforced at trigger; surfaced here too)
-  2. Any high-severity security finding (hard security boundary)
-  3. > 10% of Guardian findings are high severity  ("red line")
-  4. > 10% of executed tests failed
-  5. SonarQube quality gate failed      (only when the project reports a status)
+  2. No linked Jira story               (traceability is required)
+  3. > 10% of executed tests failed
+  4. SonarQube quality gate failed / not analysed (required)
 
 Thresholds live in one place so the policy is easy to see and tune.
 """
@@ -19,7 +18,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .code_guardian import GuardianResult
     from .test_executor import ExecutionSummary
 
 _SKILLS_FILE = Path(__file__).parent.parent / "agents" / "quality-gate" / "SKILLS.md"
@@ -39,7 +37,6 @@ def _extract_skill(name: str) -> str:
 # sync with the boundaries described in the skill.
 QUALITY_GATE_SYSTEM = _extract_skill("QUALITY_GATE_SYSTEM")
 
-RED_LINE_THRESHOLD = 0.10       # fraction of high-severity Guardian findings
 TEST_FAILURE_THRESHOLD = 0.10   # fraction of failed tests
 
 
@@ -69,15 +66,12 @@ class GateResult:
 class QualityGate:
     def __init__(
         self,
-        red_line_threshold: float = RED_LINE_THRESHOLD,
         test_failure_threshold: float = TEST_FAILURE_THRESHOLD,
     ):
-        self.red_line_threshold = red_line_threshold
         self.test_failure_threshold = test_failure_threshold
 
     def evaluate(
         self,
-        guardian: "GuardianResult",
         execution: "ExecutionSummary",
         internal_pipeline_failed: bool = False,
         sonar_status: str | None = None,
@@ -101,27 +95,10 @@ class QualityGate:
             "linked" if jira_story_linked else "N/A",
         ))
 
-        # 2. Security boundary — any high-severity security finding fails.
-        sec_high = guardian.high_security
-        checks.append(GateCheck(
-            "Security checks",
-            sec_high == 0,
-            f"{sec_high} high-severity security finding(s)" if sec_high else "no high-severity security findings",
-        ))
+        # (Security is now covered by SonarQube — the Code Guardian checks were
+        # removed from the flow.)
 
-        # 3. Guardian red line — > threshold share of findings are high severity.
-        total = guardian.total
-        high = guardian.high
-        ratio = (high / total) if total else 0.0
-        checks.append(GateCheck(
-            "Code Guardian red line",
-            ratio <= self.red_line_threshold,
-            f"{high}/{total} findings high severity ({ratio:.0%} > {self.red_line_threshold:.0%})"
-            if ratio > self.red_line_threshold
-            else f"{high}/{total} findings high severity ({ratio:.0%})",
-        ))
-
-        # 4. Test failures — > threshold share of executed tests failed.
+        # 3. Test failures — > threshold share of executed tests failed.
         executed = execution.passed + execution.failed + execution.skipped
         fail_ratio = (execution.failed / executed) if executed else 0.0
         checks.append(GateCheck(
