@@ -159,7 +159,28 @@ class CommentBuilder:
         "new_bugs": "🐞 New bugs",
         "new_vulnerabilities": "🔓 New vulnerabilities",
         "new_code_smells": "👃 New code smells",
+        "bugs": "🐞 Bugs",
+        "vulnerabilities": "🔓 Vulnerabilities",
+        "code_smells": "👃 Code smells",
+        "security_hotspots": "🛡️ Security hotspots",
+        "violations": "⚠️ Issues",
     }
+    # Headline measures shown when the gate reports no per-condition breakdown.
+    _SONAR_MEASURE_ORDER = [
+        "bugs", "vulnerabilities", "code_smells", "security_hotspots",
+        "coverage", "duplicated_lines_density",
+        "reliability_rating", "security_rating", "sqale_rating",
+    ]
+
+    @staticmethod
+    def _sonar_measure_rows(measures: dict) -> list[str]:
+        """Metric · Value rows for the headline measures the server reported."""
+        rows = []
+        for m in CommentBuilder._SONAR_MEASURE_ORDER:
+            if m in measures:
+                label = CommentBuilder._SONAR_METRIC_LABELS.get(m, m)
+                rows.append(f"| {label} | {CommentBuilder._sonar_value(m, measures[m])} |")
+        return rows
 
     @staticmethod
     def _sonar_value(metric: str, value) -> str:
@@ -216,7 +237,6 @@ class CommentBuilder:
             return f"{heading}\n\n> ⚠️ Unavailable — {reason}.\n"
 
         verdict = "✅ **PASSED**" if result.status == "OK" else "❌ **FAILED**"
-        link = f" · [Open dashboard]({result.dashboard_url})" if result.dashboard_url else ""
 
         rows = CommentBuilder._sonar_condition_rows(result.conditions)
         if rows:
@@ -225,12 +245,15 @@ class CommentBuilder:
                 "|---|--------|----------|--------|\n" + "\n".join(rows)
             )
         else:
-            table = (
-                "_Gate passed — no conditions reported._"
-                if result.status == "OK" else "_No gate conditions available._"
-            )
+            # No per-condition breakdown (e.g. a branch scan) — show the headline
+            # measures inline instead of a link out.
+            mrows = CommentBuilder._sonar_measure_rows(result.measures)
+            if mrows:
+                table = "| Metric | Value |\n|--------|-------|\n" + "\n".join(mrows)
+            else:
+                table = "_Gate passed._" if result.status == "OK" else "_Gate failed._"
 
-        return f"{heading}\n\n> {verdict}{link}\n\n{table}\n"
+        return f"{heading}\n\n> {verdict}\n\n{table}\n"
 
     @staticmethod
     def quality_gate(result: GateResult) -> str:
