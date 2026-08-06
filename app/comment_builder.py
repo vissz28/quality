@@ -195,12 +195,15 @@ class CommentBuilder:
                 continue
             label = CommentBuilder._SONAR_METRIC_LABELS.get(m, m)
             value = CommentBuilder._sonar_value(m, measures[m])
-            rating = "—"
+            note = "—"
             rk = CommentBuilder._SONAR_MEASURE_RATING.get(m)
             if rk and measures.get(rk):
                 letter = CommentBuilder._sonar_value(rk, measures[rk])
-                rating = f"{CommentBuilder._SONAR_RATING_ICON.get(letter, '')} {letter}".strip()
-            rows.append(f"| {label} | {value} | {rating} |")
+                note = f"{CommentBuilder._SONAR_RATING_ICON.get(letter, '')} {letter}".strip()
+            elif m == "security_hotspots" and measures.get("security_hotspots_reviewed"):
+                pct = CommentBuilder._sonar_value("security_hotspots_reviewed", measures["security_hotspots_reviewed"])
+                note = f"{pct} reviewed"
+            rows.append(f"| {label} | {value} | {note} |")
         return rows
 
     @staticmethod
@@ -269,10 +272,13 @@ class CommentBuilder:
             path = comp.split(":", 1)[1] if ":" in comp else comp
             line = i.get("line")
             loc = f"`{path}:{line}`" if line else f"`{path}`"
-            rows.append(f"| {sicon} {sev.title()} | {typ} | {loc} | {_cell(i.get('message', ''))} |")
+            effort = i.get("effort") or i.get("debt") or "—"
+            rows.append(
+                f"| {sicon} {sev.title()} | {typ} | {loc} | {effort} | {_cell(i.get('message', ''))} |"
+            )
         table = (
-            "| Severity | Type | Location | Message |\n"
-            "|----------|------|----------|---------|\n" + "\n".join(rows)
+            "| Severity | Type | Location | Effort | Message |\n"
+            "|----------|------|----------|--------|---------|\n" + "\n".join(rows)
         )
         return _details(f"🔎 <strong>Issues</strong> ({len(issues)} shown)", table)
 
@@ -306,7 +312,7 @@ class CommentBuilder:
             # measures inline instead of a link out.
             mrows = CommentBuilder._sonar_measure_rows(result.measures)
             if mrows:
-                table = "| Metric | Value | Rating |\n|--------|-------|--------|\n" + "\n".join(mrows)
+                table = "| Metric | Value | Rating / note |\n|--------|-------|--------|\n" + "\n".join(mrows)
             else:
                 table = "_Gate passed._" if result.status == "OK" else "_Gate failed._"
 

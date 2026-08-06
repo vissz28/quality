@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Metrics we pull for the MR comment. Kept human-meaningful.
 _METRIC_KEYS = (
-    "bugs,vulnerabilities,code_smells,security_hotspots,"
+    "bugs,vulnerabilities,code_smells,security_hotspots,security_hotspots_reviewed,"
     "coverage,duplicated_lines_density,ncloc,sqale_index,"
     "sqale_rating,security_rating,reliability_rating"
 )
